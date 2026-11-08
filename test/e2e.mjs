@@ -35,6 +35,10 @@ const CLAUDE_CODE_CIMD = 'https://claude.ai/oauth/claude-code-client-metadata';
 // (token_endpoint_auth_method none) and a confidential one (private_key_jwt, ES256).
 const CLAUDE_AI_CIMD = 'https://claude.ai/oauth/mcp-oauth-client-metadata';
 const CLAUDE_AI_CIMD_CONFIDENTIAL = `${CLAUDE_AI_CIMD}/confidential_client`;
+const DUET_TOOLS = ['whoami', 'mockgit_list_my_repos', 'mockgit_get_readme', 'mockgit_create_issue'];
+const ANIMAMESH_TOOLS = ['whoami', 'mockgit_repo_stats'];
+/** Text that exists only inside upstream README content: it may reach the agent, never a log. */
+const UPSTREAM_MARKERS = ['README-MARKER-', 'INJECTION-MARKER-c7a1'];
 const STARTED = new Date();
 const STAMP = STARTED.toISOString().replace(/[:.]/g, '-');
 const OUT_DIR = join(ROOT, 'test-output');
@@ -259,6 +263,44 @@ async function cleanupNewGrants(clientId, before) {
   for (const id of await grantIds(clientId)) if (!before.has(id)) state.cleanup.push({ client_id: clientId, grant_id: id });
 }
 
+/** A fresh DCR client connected as an agent (a second app, or a thief's copy of one). */
+async function newConnection(clientName, agent, redirectUri = CLAUDE_CALLBACK) {
+  const r = await register({ client_name: clientName, redirect_uris: [redirectUri], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' });
+  expect(r.status === 201 && r.body.client_id, `register ${clientName}: HTTP ${r.status}`);
+  state.cleanup.push({ client_id: r.body.client_id, delete_client: true });
+  const c = await connect({ clientId: r.body.client_id, redirectUri, agent });
+  return { clientId: r.body.client_id, tokens: c.tokens, consent: c.consent };
+}
+
+/** The owner's admin session (password sign-in): the only thing that can approve a call. */
+async function ownerSession(returnTo = '/admin') {
+  const res = await tfetch(`${BASE}/admin/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
+    body: new URLSearchParams({ username: 'owner', password: OWNER_PASSWORD, return_to: returnTo }),
+    redirect: 'manual',
+  });
+  const cookie = res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  expect(res.status === 303 && cookie.startsWith('__Host-broker-admin='), `owner sign-in HTTP ${res.status}`);
+  return { cookie, location: res.headers.get('location') };
+}
+
+async function decideApproval(id, decision, headers) {
+  const res = await tfetch(`${BASE}/admin/approvals/${id}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE, ...headers },
+    body: new URLSearchParams({ decision }),
+    redirect: 'manual',
+  });
+  return { status: res.status, location: res.headers.get('location'), text: await res.text() };
+}
+
+async function approvalsList() {
+  return (await admin('GET', 'approvals?limit=100')).body.approvals ?? [];
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 const health = async () => (await (await tfetch(`${BASE}/healthz`)).json());
 
 // ------------------------------------------------------------------------------------------------
@@ -404,7 +446,7 @@ async function main() {
   await check('C7', 'MCP initialize and tools/list over Streamable HTTP (official SDK client)', async () => {
     const { info, tools } = await listTools(duet.tokens.access_token);
     expect(info?.name === 'agent-secrets-broker', `server ${info?.name}`);
-    expect(tools.join(',') === 'whoami,mockgit_list_my_repos', `tools ${tools.join(',')}`);
+    expect(tools.join(',') === DUET_TOOLS.join(','), `tools ${tools.join(',')}`);
     return `server ${info.name} ${info.version}; tools: ${tools.join(', ')}`;
   });
 
@@ -414,8 +456,9 @@ async function main() {
     expect(!r.isError, r.text);
     expect(r.data.agent === 'duet', `agent ${r.data.agent}`);
     expect(r.data.client.name === 'Claude (scripted test)' && r.data.client.id === duet.clientId, 'client mismatch');
-    expect(r.data.allowed_tools.join(',') === 'whoami,mockgit_list_my_repos', `allowed ${r.data.allowed_tools}`);
-    return `agent=${r.data.agent}, client="${r.data.client.name}", allowed=[${r.data.allowed_tools.join(', ')}]`;
+    expect(r.data.allowed_tools.join(',') === DUET_TOOLS.join(','), `allowed ${r.data.allowed_tools}`);
+    expect(r.data.approval_required.join(',') === 'mockgit_create_issue', `approval_required ${r.data.approval_required}`);
+    return `agent=${r.data.agent}, client="${r.data.client.name}", allowed=[${r.data.allowed_tools.join(', ')}], approval_required=[${r.data.approval_required.join(', ')}]`;
   });
   await check('T3', 'Do something real: mockgit_list_my_repos returns a trimmed list', async () => {
     const r = await callTool(duet.tokens.access_token, 'mockgit_list_my_repos', { limit: 5 });
@@ -490,7 +533,7 @@ async function main() {
   });
   await check('T6', 'Revoke: next call 401, refresh refused, reconnecting needs consent again', async () => {
     const rv = await admin('POST', 'revoke', { client_id: duet.clientId });
-    expect(rv.status === 200 && rv.body.revoked_grants >= 1, `revoke HTTP ${rv.status} ${JSON.stringify(rv.body)}`);
+    expect(rv.status === 200 && rv.body.cut_off_at, `revoke HTTP ${rv.status} ${JSON.stringify(rv.body)}`);
     const dead = await until('access token rejected', async () => {
       const r = await rawMcp(duet.tokens.access_token);
       return { done: r.status === 401, state: r.status };
@@ -503,6 +546,164 @@ async function main() {
     const who = await callTool(duet.tokens.access_token, 'whoami');
     expect(!who.isError, 'reconnected whoami failed');
     return `401 after ${Math.round(dead.waitedMs / 1000)}s; refresh invalid_grant; consent page shown again; reconnected`;
+  });
+
+  // ---- Cross-agent isolation (Phase 2 D) -------------------------------------------------------
+  await check('I1', 'Cross-agent isolation: AnimaMesh gets only its tools, Duet cannot call them, and each refusal is audited', async () => {
+    const mesh = await newConnection('AnimaMesh (scripted test)', 'animamesh');
+    expect(/value="animamesh" required checked/.test(mesh.consent.html), 'animamesh not preselected');
+    state.animamesh = mesh;
+    const { tools } = await listTools(mesh.tokens.access_token);
+    expect(tools.join(',') === ANIMAMESH_TOOLS.join(','), `animamesh tools ${tools}`);
+    const stats = await callTool(mesh.tokens.access_token, 'mockgit_repo_stats');
+    expect(!stats.isError && stats.data.total === 8 && !('repos' in stats.data), `stats ${stats.text.slice(0, 80)}`);
+    const meshTriesDuet = await callTool(mesh.tokens.access_token, 'mockgit_list_my_repos');
+    const meshTriesWrite = await callTool(mesh.tokens.access_token, 'mockgit_create_issue', { repo: 'sandbox-alpha', title: 'x' });
+    const duetTriesMesh = await callTool(duet.tokens.access_token, 'mockgit_repo_stats');
+    expect(meshTriesDuet.isError && meshTriesWrite.isError && duetTriesMesh.isError, 'a cross-agent call was not refused');
+    state.inspector = await newConnection('Inspector (scripted test)', 'inspector');
+    await until('refusals audited', async () => {
+      const lines = (await admin('GET', 'audit?limit=100')).body.lines;
+      const denied = (client, tool) => lines.some((l) => l.client_id === client && l.tool === tool && l.outcome === 'denied' && l.code === 'not_in_policy');
+      return { done: denied(mesh.clientId, 'mockgit_list_my_repos') && denied(mesh.clientId, 'mockgit_create_issue') && denied(duet.clientId, 'mockgit_repo_stats'), state: 'not all listed' };
+    }, { timeoutMs: 90_000, intervalMs: 3000 });
+    return `animamesh tools: ${tools.join(', ')} (counts only); animamesh -> list_my_repos and create_issue, duet -> repo_stats: refused and audited not_in_policy`;
+  });
+
+  // ---- Per-call approval (Phase 2 C) ----------------------------------------------------------
+  const issueArgs = { repo: 'sandbox-alpha', title: `e2e approval ${STAMP}`, body: 'Opened by the scripted test.' };
+  let approvalId;
+  await check('AP1', 'Per-call approval: a sensitive call returns pending, nothing runs, the owner sees the request', async () => {
+    const first = await callTool(duet.tokens.access_token, 'mockgit_create_issue', issueArgs);
+    expect(!first.isError && first.data?.status === 'pending_approval' && first.data.approval_id, `first call: ${first.text.slice(0, 120)}`);
+    approvalId = first.data.approval_id;
+    expect(first.data.approve_at === `${BASE}/admin/approvals/${approvalId}`, `approve_at ${first.data.approve_at}`);
+    const again = await callTool(duet.tokens.access_token, 'mockgit_create_issue', issueArgs);
+    expect(again.data?.status === 'pending_approval' && again.data.approval_id === approvalId, 'repeat call did not return the same pending approval');
+    const listed = (await approvalsList()).find((a) => a.id === approvalId);
+    expect(listed?.status === 'pending' && listed.agent === 'duet' && listed.tool === 'mockgit_create_issue' && listed.summary?.title === issueArgs.title, `admin list: ${JSON.stringify(listed)}`);
+    expect(listed.key === undefined, 'internal key exposed');
+    return `pending ${approvalId}, same id on repeat; listed for the owner with repo, title and body; nothing created`;
+  });
+  await check('AP2', "Only the owner's password session can approve: an agent token, the admin token and no session are refused", async () => {
+    const withAgent = await decideApproval(approvalId, 'approved', { authorization: `Bearer ${duet.tokens.access_token}` });
+    const withAdmin = await decideApproval(approvalId, 'approved', { authorization: `Bearer ${ADMIN_TOKEN}` });
+    const apiApprove = await admin('POST', 'approvals', { id: approvalId, decision: 'approved' });
+    expect(withAgent.status === 403 && withAdmin.status === 403 && apiApprove.status === 404, `agent ${withAgent.status}, admin token ${withAdmin.status}, admin API ${apiApprove.status}`);
+    const still = (await approvalsList()).find((a) => a.id === approvalId);
+    expect(still?.status === 'pending', `status after refused attempts: ${still?.status}`);
+    const { cookie, location } = await ownerSession(`/admin/approvals/${approvalId}`);
+    expect(location === `/admin/approvals/${approvalId}`, `sign-in returned to ${location}`);
+    const page = await (await tfetch(`${BASE}/admin/approvals/${approvalId}`, { headers: { cookie } })).text();
+    expect(page.includes('mockgit_create_issue') && page.includes(issueArgs.title) && page.includes('Approve once'), 'approval page missing details');
+    const ok = await decideApproval(approvalId, 'approved', { cookie });
+    expect(ok.status === 303, `owner approve HTTP ${ok.status}`);
+    state.ownerCookie = cookie;
+    return 'agent token 403, admin token 403, admin API has no approve route (404); owner signed in from the link, saw the call, approved';
+  });
+  await check('AP3', 'The approved call runs once; the same call again needs a new approval', async () => {
+    const run = await callTool(duet.tokens.access_token, 'mockgit_create_issue', issueArgs);
+    expect(!run.isError && run.data?.created === true && run.data.number, `approved call: ${run.text.slice(0, 120)}`);
+    const keys = Object.keys(run.data).sort().join(',');
+    expect(keys === 'created,number,repo,title,url', `fields ${keys}`);
+    const next = await callTool(duet.tokens.access_token, 'mockgit_create_issue', issueArgs);
+    expect(next.data?.status === 'pending_approval' && next.data.approval_id !== approvalId, 'second run did not need a new approval');
+    state.secondApproval = next.data.approval_id;
+    await decideApproval(approvalId, 'approved', { cookie: state.ownerCookie });
+    const after = (await approvalsList()).find((a) => a.id === approvalId);
+    expect(after?.status === 'used', `used approval status ${after?.status}`);
+    return `ran once (issue #${run.data.number}; fields created/number/repo/title/url); the repeat is pending as ${next.data.approval_id}; the used approval can't be approved again`;
+  });
+  await check('AP4', 'An approval covers only the exact arguments and the client that asked', async () => {
+    const ok = await decideApproval(state.secondApproval, 'approved', { cookie: state.ownerCookie });
+    expect(ok.status === 303, `approve HTTP ${ok.status}`);
+    const changed = await callTool(duet.tokens.access_token, 'mockgit_create_issue', { ...issueArgs, title: `${issueArgs.title} (changed)` });
+    expect(changed.data?.status === 'pending_approval' && changed.data.approval_id !== state.secondApproval, 'a changed title ran on the old approval');
+    const other = await callTool(state.inspector.tokens.access_token, 'mockgit_create_issue', issueArgs);
+    expect(other.data?.status === 'pending_approval', "another client ran on duet's approval");
+    const mine = await callTool(duet.tokens.access_token, 'mockgit_create_issue', issueArgs);
+    expect(mine.data?.created === true, `the approved client and arguments: ${mine.text.slice(0, 100)}`);
+    return 'changed title: new pending; another client with the same arguments: its own pending; the approved client with the approved arguments: ran';
+  });
+  await check('AP5', 'Deny: the call is refused, and asking again stays refused while the denial stands', async () => {
+    const args = { repo: 'sandbox-bravo', title: `e2e deny ${STAMP}` };
+    const p = await callTool(duet.tokens.access_token, 'mockgit_create_issue', args);
+    expect(p.data?.status === 'pending_approval', 'not pending');
+    const d = await decideApproval(p.data.approval_id, 'denied', { cookie: state.ownerCookie });
+    expect(d.status === 303, `deny HTTP ${d.status}`);
+    const r1 = await callTool(duet.tokens.access_token, 'mockgit_create_issue', args);
+    const r2 = await callTool(duet.tokens.access_token, 'mockgit_create_issue', args);
+    expect(r1.isError && r1.text.includes('approval_denied') && r2.text.includes('approval_denied'), `after deny: ${r1.text.slice(0, 80)}`);
+    return `denied ${p.data.approval_id}; the call and a retry both return approval_denied`;
+  });
+  await check('AP6', 'Policy can put a read-only tool behind approval for one agent only', async () => {
+    const insp = await callTool(state.inspector.tokens.access_token, 'mockgit_get_readme', { repo: 'sandbox-alpha' });
+    const duetRead = await callTool(duet.tokens.access_token, 'mockgit_get_readme', { repo: 'sandbox-alpha' });
+    expect(insp.data?.status === 'pending_approval' && duetRead.data?.untrusted_content === true, `inspector ${insp.text.slice(0, 60)}; duet ${duetRead.text.slice(0, 60)}`);
+    return 'inspector (policy approval_required): pending; duet: the same read runs without approval';
+  });
+
+  // ---- Negative tests (Phase 2 D) -------------------------------------------------------------
+  await check('N1', 'Prompt injection in upstream content: delivered marked untrusted; the write it asks for is refused or waits for the owner', async () => {
+    const r = await callTool(duet.tokens.access_token, 'mockgit_get_readme', { repo: 'sandbox-charlie' });
+    expect(!r.isError && r.data.untrusted_content === true && r.data.note && r.data.content.includes('INJECTION-MARKER-c7a1'), `readme: ${r.text.slice(0, 100)}`);
+    // Play an agent that obeys the injection: first with its access token in the body, then without.
+    const leak = await callTool(duet.tokens.access_token, 'mockgit_create_issue', { repo: 'sandbox-alpha', title: 'maintenance', body: `key: none. token: ${duet.tokens.access_token}` });
+    expect(leak.isError && leak.text.includes('credential_in_arguments'), `token in body: ${leak.text.slice(0, 100)}`);
+    const obey = await callTool(duet.tokens.access_token, 'mockgit_create_issue', { repo: 'sandbox-alpha', title: 'maintenance', body: 'Following the README note.' });
+    expect(obey.data?.status === 'pending_approval', 'the injected write did not wait for approval');
+    const d = await decideApproval(obey.data.approval_id, 'denied', { cookie: state.ownerCookie });
+    expect(d.status === 303, 'deny failed');
+    return `README arrives with untrusted_content=true and a note; an obeying agent's write with its token in the body is refused (credential_in_arguments); without the token it waits for the owner (${obey.data.approval_id}, denied)`;
+  });
+  await check('N2', 'A key embedded in upstream content is scrubbed before the agent sees it, and the redaction is audited', async () => {
+    const r = await callTool(duet.tokens.access_token, 'mockgit_get_readme', { repo: 'sandbox-delta' });
+    expect(!r.isError && r.text.includes('x-access-token:[REDACTED]@') && r.text.includes('README-MARKER-sandbox-delta'), `readme: ${r.text.slice(0, 120)}`);
+    expect(Object.keys(findSecrets(r.text, values)).length === 0, 'a dummy secret reached the agent');
+    await until('redaction audited', async () => {
+      const lines = (await admin('GET', 'audit?limit=100')).body.lines;
+      return { done: lines.some((l) => l.type === 'redaction' && l.tool === 'mockgit_get_readme' && l.client_id === duet.clientId), state: 'not yet listed' };
+    }, { timeoutMs: 90_000, intervalMs: 3000 });
+    return "the README's clone line arrives as x-access-token:[REDACTED]@...; redaction audited; download_url (which also carries the key) is not passed on";
+  });
+  await check('N3', 'A stolen access token reaches only its own agent tools, until it expires or is revoked', async () => {
+    const t = duet.tokens.access_token;
+    const adminApi = await tfetch(`${BASE}/admin/api/clients`, { headers: { authorization: `Bearer ${t}` } });
+    const approvalsApi = await tfetch(`${BASE}/admin/api/approvals`, { headers: { authorization: `Bearer ${t}` } });
+    const adminPage = await (await tfetch(`${BASE}/admin`, { headers: { authorization: `Bearer ${t}` } })).text();
+    const revoke = await tfetch(`${BASE}/admin/revoke`, { method: 'POST', headers: { authorization: `Bearer ${t}`, origin: BASE, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: duet.clientId }), redirect: 'manual' });
+    expect(adminApi.status === 401 && approvalsApi.status === 401 && !adminPage.includes('<h2>Connections</h2>') && revoke.status === 403, `admin API ${adminApi.status}, approvals API ${approvalsApi.status}, revoke ${revoke.status}`);
+    const other = await callTool(t, 'mockgit_repo_stats');
+    expect(other.isError, "a stolen duet token reached animamesh's tool");
+    const who = await callTool(t, 'whoami');
+    const ttl = Math.round((new Date(who.data.token.expires_at) - Date.now()) / 1000);
+    expect(ttl > 0 && ttl <= 900, `token ttl ${ttl}`);
+    return `it can call duet's tools (whoami OK, expires in ${ttl}s, at most 900s); admin API 401, approvals API 401, admin page shows sign-in only, revoke 403, approve 403 (AP2), other agents' tools refused; writes still wait for the owner`;
+  });
+  await check('N4', 'A stolen refresh token: the thief can mint tokens until the owner revokes; revoke cuts everyone off', async () => {
+    const victim = await newConnection('Claude (stolen token test)', 'duet');
+    const stolen = victim.tokens.refresh_token;
+    const wrongClient = await token({ grant_type: 'refresh_token', refresh_token: stolen, client_id: duet.clientId, resource: MCP });
+    expect(wrongClient.status >= 400, `refresh under another client_id: HTTP ${wrongClient.status}`);
+    const thief = await token({ grant_type: 'refresh_token', refresh_token: stolen, client_id: victim.clientId, resource: MCP });
+    expect(thief.status === 200 && thief.body.access_token, `thief refresh HTTP ${thief.status} ${thief.body.error ?? ''}`);
+    const thiefWho = await callTool(thief.body.access_token, 'whoami');
+    expect(!thiefWho.isError && thiefWho.data.agent === 'duet', 'the thief token did not work');
+    // The real client refreshes later with the same refresh token the thief used.
+    const legit = await token({ grant_type: 'refresh_token', refresh_token: stolen, client_id: victim.clientId, resource: MCP });
+    const legitResult = legit.status === 200 ? 'still worked (the previous refresh token stays valid until the newer one is used)' : `was refused (${legit.body.error})`;
+    const thief2 = await token({ grant_type: 'refresh_token', refresh_token: thief.body.refresh_token, client_id: victim.clientId, resource: MCP });
+    const thiefLatestRefresh = thief2.status === 200 ? thief2.body.refresh_token : thief.body.refresh_token;
+    const thiefLatestAccess = thief2.status === 200 ? thief2.body.access_token : thief.body.access_token;
+    const rv = await admin('POST', 'revoke', { client_id: victim.clientId });
+    expect(rv.status === 200 && rv.body.cut_off_at, `revoke ${rv.status} ${JSON.stringify(rv.body)}`);
+    const dead = await until('thief access token rejected', async () => {
+      const r = await rawMcp(thiefLatestAccess);
+      return { done: r.status === 401, state: r.status };
+    }, { timeoutMs: 90_000, intervalMs: 1000 });
+    const after = await token({ grant_type: 'refresh_token', refresh_token: thiefLatestRefresh, client_id: victim.clientId, resource: MCP });
+    expect(after.status === 400 && after.body.error === 'invalid_grant', `thief refresh after revoke: HTTP ${after.status} ${after.body.error ?? ''}`);
+    return `refresh under another client_id refused (HTTP ${wrongClient.status}); the thief minted a working token; the real client's later refresh with the same token ${legitResult}; revoked seconds after the connection was made (the library's KV listing found ${rv.body.revoked_grants} grant(s)); the broker's revocation list cut the thief's newest access token off within ${Math.round(dead.waitedMs / 1000)}s and its refresh token got invalid_grant`;
   });
 
   // ---- CIMD: Anthropic's published Claude Code client metadata document ------------------------
@@ -650,7 +851,7 @@ async function main() {
     const errors = transcript.filter((t) => t.status >= 400).length;
     return `${transcript.length} responses (${errors} with status >= 400), ${Math.round(text.length / 1024)} KB, 0 hits for A-G`;
   });
-  await check('L2', 'No dummy secret in the audit log; audit covers ok, error, denied, consent, revoke', async () => {
+  await check('L2', 'No dummy secret or upstream content in the audit log; it covers ok, error, denied, consent, revoke, approvals', async () => {
     const lines = audit.body.lines.filter((l) => new Date(l.ts) >= new Date(STARTED.getTime() - 5000));
     const hits = findSecrets(JSON.stringify(audit.body.lines), values);
     expect(Object.keys(hits).length === 0, `hits: ${JSON.stringify(hits)}`);
@@ -662,10 +863,17 @@ async function main() {
     has((l) => l.type === 'consent' && l.outcome === 'ok', 'consent ok');
     has((l) => l.type === 'revoke', 'revoke');
     has((l) => l.type === 'login_failed', 'login_failed');
+    has((l) => l.type === 'approval' && l.code === 'approval_requested', 'approval_requested');
+    has((l) => l.type === 'approval' && l.code === 'owner_approved', 'owner_approved');
+    has((l) => l.type === 'approval' && l.code === 'owner_denied', 'owner_denied');
+    has((l) => l.type === 'approval' && l.code === 'approval_used', 'approval_used');
+    has((l) => l.type === 'tool_call' && l.code === 'credential_in_arguments' && l.outcome === 'denied', 'credential_in_arguments');
+    const content = UPSTREAM_MARKERS.filter((m) => JSON.stringify(audit.body.lines).includes(m));
+    expect(content.length === 0, `upstream content in the audit log: ${content.join(', ')}`);
     const redactions = lines.filter((l) => l.type === 'redaction').length;
-    return `${lines.length} lines from this run, 0 hits; redaction backstop fired ${redactions} times`;
+    return `${lines.length} lines from this run, 0 secret hits, no upstream content (README markers); audit covers approvals and the credential refusal; redaction backstop fired ${redactions} times (N2 makes it fire on purpose)`;
   });
-  await check('L3', 'No dummy secret in the Worker logs', async () => {
+  await check('L3', 'No dummy secret and no upstream content in the Worker logs', async () => {
     let logText;
     let source;
     if (state.tail) {
@@ -682,7 +890,9 @@ async function main() {
     expect(logText.length > 0 && auditEvents > 0, `log capture looks empty (${logText.length} bytes, ${auditEvents} audit events)`);
     const hits = findSecrets(logText, values);
     expect(Object.keys(hits).length === 0, `hits: ${JSON.stringify(hits)}`);
-    return `${source}: ${Math.round(logText.length / 1024)} KB, ${auditEvents} audit events, 0 hits`;
+    const content = UPSTREAM_MARKERS.filter((m) => logText.includes(m));
+    expect(content.length === 0, `upstream content in the Worker logs: ${content.join(', ')}`);
+    return `${source}: ${Math.round(logText.length / 1024)} KB, ${auditEvents} audit events, 0 secret hits, no upstream content (README markers)`;
   });
 }
 
@@ -698,6 +908,8 @@ function writeReport() {
     T2: 'Acceptance 2', T3: 'Acceptance 3', T4a: 'Acceptance 4', T4b: 'Acceptance 4', T5: 'Acceptance 5', T6: 'Acceptance 6', T7: 'Acceptance 7',
     L1: 'Acceptance 4', L2: 'Acceptance 4', L3: 'Acceptance 4', C1: 'Acceptance 1 (scripted)', C2: 'Acceptance 1 (scripted)', C4: 'Acceptance 1 (scripted)', C5: 'Acceptance 1 (scripted)',
     M2: 'Acceptance 1 (scripted)',
+    I1: 'Phase 2 D', AP1: 'Phase 2 C', AP2: 'Phase 2 C', AP3: 'Phase 2 C', AP4: 'Phase 2 C', AP5: 'Phase 2 C', AP6: 'Phase 2 C',
+    N1: 'Phase 2 D', N2: 'Phase 2 D', N3: 'Phase 2 D', N4: 'Phase 2 D',
   };
   const md = `# Test log: ${TARGET === 'remote' ? 'deployed sandbox' : 'local wrangler dev'}
 

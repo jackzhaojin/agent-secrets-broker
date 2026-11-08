@@ -1,5 +1,7 @@
 import { AuthorizationError, CimdFetchError, type ConsentDescription, type GrantSummary } from '@cloudflare/workers-oauth-provider';
+import { approvals, displayStatus, type ApprovalRecord } from './approvals';
 import { audit, readAudit } from './audit';
+import { revocations } from './revocations';
 import { adminSessionCookie, checkOwnerPassword, clearAdminSessionCookie, hasAdminSession, hasAdminToken, sameOrigin } from './auth';
 import { OWNER_USER_ID, baseUrl, type Env, type GrantProps } from './env';
 import { escape, htmlResponse, page } from './html';
@@ -217,6 +219,10 @@ async function listConnections(env: Env): Promise<Connection[]> {
  * one grant when grantId is given (a CIMD client ID is shared by every installation of that app).
  */
 async function revokeClient(env: Env, ctx: ExecutionContext, clientId: string, deleteClient: boolean, grantId?: string) {
+  // First the broker's own list: it cuts every token of the client (or grant) off at once, even
+  // one the library's KV listing below doesn't see yet.
+  const cutOffAt = grantId ? await revocations(env).revokeGrant(grantId) : await revocations(env).revokeClient(clientId);
+  ctx.waitUntil(revocations(env).prune());
   const grants = (await allOwnerGrants(env)).filter((g) => g.clientId === clientId && (!grantId || g.id === grantId));
   for (const g of grants) await env.OAUTH_PROVIDER.revokeGrant(g.id, OWNER_USER_ID);
   let deleted = false;
@@ -225,7 +231,7 @@ async function revokeClient(env: Env, ctx: ExecutionContext, clientId: string, d
     deleted = true;
   }
   audit(env, ctx, { type: 'revoke', outcome: 'ok', client_id: clientId, code: `grants_${grants.length}${deleted ? '_client_deleted' : ''}` });
-  return { client_id: clientId, revoked_grants: grants.length, client_deleted: deleted };
+  return { client_id: clientId, cut_off_at: new Date(cutOffAt).toISOString(), revoked_grants: grants.length, client_deleted: deleted };
 }
 
 async function adminApi(request: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {
@@ -243,6 +249,13 @@ async function adminApi(request: Request, env: Env, ctx: ExecutionContext, path:
   if (path === '/admin/api/audit' && request.method === 'GET') {
     const limit = Number(new URL(request.url).searchParams.get('limit') ?? '100');
     return json(200, { lines: await readAudit(env, limit) });
+  }
+  // Read-only on purpose: approving needs the owner's password session (see adminPage), so
+  // nothing that holds only the admin token (a script, an agent on the owner's machine) can approve.
+  if (path === '/admin/api/approvals' && request.method === 'GET') {
+    const now = Date.now();
+    const list = await approvals(env).list(Number(new URL(request.url).searchParams.get('limit') ?? '50'));
+    return json(200, { approvals: list.map((r) => ({ ...r, key: undefined, display_status: displayStatus(r, now) })) });
   }
   if (path === '/admin/api/policy') {
     if (request.method === 'GET') {
@@ -270,16 +283,53 @@ async function adminApi(request: Request, env: Env, ctx: ExecutionContext, path:
   return json(404, { error: 'not found' });
 }
 
+/** After sign-in, go back to the admin page that asked for it (an approval link), never elsewhere. */
+function adminReturnTo(value: unknown): string {
+  const s = typeof value === 'string' ? value : '';
+  return /^\/admin(\/approvals\/[a-f0-9]{12})?$/.test(s) ? s : '/admin';
+}
+
+const APPROVAL_PATH = /^\/admin\/approvals\/([a-f0-9]{12})$/;
+
+function fmt(ms: number | undefined): string {
+  return ms ? new Date(ms).toISOString().slice(0, 19).replace('T', ' ') + ' UTC' : '';
+}
+
+function approvalRow(r: ApprovalRecord, now: number): string {
+  const status = displayStatus(r, now);
+  return `<tr><td><a href="/admin/approvals/${escape(r.id)}">${escape(r.id)}</a><br><span class="muted">${escape(fmt(r.created_at))}</span></td>
+<td>${escape(r.agent)}<br><span class="muted">${escape(r.client_name)}</span></td><td><code>${escape(r.tool)}</code></td>
+<td>${status === 'pending' ? `<strong>${escape(status)}</strong>` : escape(status)}</td></tr>`;
+}
+
+function approvalPage(r: ApprovalRecord, now: number): string {
+  const status = displayStatus(r, now);
+  const args = Object.entries(r.summary)
+    .map(([k, v]) => `<tr><th>${escape(k)}</th><td><pre>${escape(v)}</pre></td></tr>`)
+    .join('');
+  const decide = status === 'pending'
+    ? `<form method="post" action="/admin/approvals/${escape(r.id)}"><div class="row">
+<button class="primary" name="decision" value="approved">Approve once</button><button name="decision" value="denied">Deny</button></div></form>
+<p class="muted">Approving lets this agent run this exact call once, within 15 minutes. Any changed argument needs a new approval.</p>`
+    : `<p class="muted">Decided ${escape(fmt(r.decided_at))}${r.used_at ? `, used ${escape(fmt(r.used_at))}` : ''}.</p>`;
+  return `<h1>Approve a tool call?</h1><p><a href="/admin">Back to admin</a></p>
+<div class="card"><p><strong>${escape(r.agent)}</strong> (${escape(r.client_name)}) wants to call <code>${escape(r.tool)}</code>.</p>
+<p class="muted">Requested ${escape(fmt(r.created_at))} · status <strong>${escape(status)}</strong> · approval <code>${escape(r.id)}</code></p></div>
+<p class="warn">Check the arguments yourself. An agent can be tricked by text it read (a web page, a README, an email) into asking for something you didn't intend.</p>
+<div class="scroll"><table>${args || '<tr><td class="muted">no arguments</td></tr>'}</table></div>${decide}`;
+}
+
 async function adminPage(request: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {
   if (path === '/admin/login' && request.method === 'POST') {
     if (!sameOrigin(env, request)) return htmlResponse(403, 'Forbidden', '<h1>Forbidden</h1>');
     const form = await request.formData();
+    const returnTo = adminReturnTo(form.get('return_to'));
     const check = await checkOwnerPassword(env, request, String(form.get('password') ?? ''));
     if (check !== 'ok') {
       audit(env, ctx, { type: 'login_failed', outcome: 'denied', code: check === 'locked' ? 'locked_out' : 'bad_password' });
-      return htmlResponse(check === 'locked' ? 429 : 401, 'Sign in', '<h1>Sign in failed</h1><p><a href="/admin">Try again</a></p>');
+      return htmlResponse(check === 'locked' ? 429 : 401, 'Sign in', `<h1>Sign in failed</h1><p><a href="${escape(returnTo)}">Try again</a></p>`);
     }
-    return new Response(null, { status: 303, headers: { location: '/admin', 'set-cookie': await adminSessionCookie(env) } });
+    return new Response(null, { status: 303, headers: { location: returnTo, 'set-cookie': await adminSessionCookie(env) } });
   }
   if (path === '/admin/logout' && request.method === 'POST') {
     return new Response(null, { status: 303, headers: { location: '/admin', 'set-cookie': clearAdminSessionCookie } });
@@ -287,14 +337,45 @@ async function adminPage(request: Request, env: Env, ctx: ExecutionContext, path
 
   const signedIn = await hasAdminSession(env, request);
   if (!signedIn) {
+    // Posts (revoke, approve) need a session; a bearer token of any kind doesn't count.
+    if (request.method !== 'GET') return htmlResponse(403, 'Forbidden', '<h1>Forbidden</h1><p>Sign in first.</p>');
     return htmlResponse(
       200,
       'Broker admin',
       `<h1>Broker admin</h1><form method="post" action="/admin/login"><p>Owner password</p>
+<input type="hidden" name="return_to" value="${escape(adminReturnTo(path))}">
 <input type="text" name="username" value="owner" autocomplete="username" hidden>
 <input type="password" name="password" autocomplete="current-password" required aria-label="Owner password">
 <div class="row"><button class="primary">Sign in</button></div></form>`,
     );
+  }
+
+  const approvalMatch = path.match(APPROVAL_PATH);
+  if (approvalMatch) {
+    const id = approvalMatch[1];
+    if (request.method === 'POST') {
+      if (!sameOrigin(env, request)) return htmlResponse(403, 'Forbidden', '<h1>Forbidden</h1>');
+      const decision = String((await request.formData()).get('decision') ?? '');
+      if (decision !== 'approved' && decision !== 'denied') return htmlResponse(400, 'Bad request', '<h1>Pick approve or deny</h1>');
+      const res = await approvals(env).decide(id, decision);
+      if (res.record) {
+        const r = res.record;
+        audit(env, ctx, {
+          type: 'approval',
+          outcome: res.ok ? (decision === 'approved' ? 'ok' : 'denied') : 'error',
+          tool: r.tool,
+          agent: r.agent,
+          client_id: r.client_id,
+          client_name: r.client_name,
+          approval_id: r.id,
+          code: res.ok ? `owner_${decision}` : res.reason,
+        });
+      }
+      return new Response(null, { status: 303, headers: { location: `/admin/approvals/${id}` } });
+    }
+    const record = await approvals(env).get(id);
+    if (!record) return htmlResponse(404, 'Not found', '<h1>No such approval</h1><p><a href="/admin">Back to admin</a></p>');
+    return htmlResponse(200, 'Approve a tool call', approvalPage(record, Date.now()));
   }
 
   if (path === '/admin/revoke' && request.method === 'POST') {
@@ -305,7 +386,12 @@ async function adminPage(request: Request, env: Env, ctx: ExecutionContext, path
     return new Response(null, { status: 303, headers: { location: '/admin' } });
   }
 
-  const [connections, lines, loaded] = await Promise.all([listConnections(env), readAudit(env, 50), loadPolicy(env)]);
+  const [connections, lines, loaded, approvalList] = await Promise.all([listConnections(env), readAudit(env, 50), loadPolicy(env), approvals(env).list(20)]);
+  const now = Date.now();
+  const pending = approvalList.filter((r) => displayStatus(r, now) === 'pending');
+  const recent = approvalList.filter((r) => displayStatus(r, now) !== 'pending').slice(0, 10);
+  const approvalTable = (rs: ApprovalRecord[], empty: string) =>
+    `<div class="scroll"><table><tr><th>Approval</th><th>Agent</th><th>Tool</th><th>Status</th></tr>${rs.map((r) => approvalRow(r, now)).join('') || `<tr><td colspan="4" class="muted">${empty}</td></tr>`}</table></div>`;
   const rows = connections
     .map((c) => {
       const grants = c.grants.length
@@ -317,13 +403,15 @@ ${c.kind === 'registered (DCR)' ? `<form method="post" action="/admin/revoke" st
     })
     .join('');
   const audits = lines
-    .map((l) => `<tr><td>${escape(l.ts.slice(0, 19))}</td><td>${escape(l.type)}</td><td>${escape(l.agent ?? '')}</td><td>${escape(l.tool ?? '')}</td><td>${escape(l.outcome)}</td><td>${escape(l.code ?? '')}</td></tr>`)
+    .map((l) => `<tr><td>${escape(l.ts.slice(0, 19))}</td><td>${escape(l.type)}</td><td>${escape(l.agent ?? '')}</td><td>${escape(l.tool ?? '')}</td><td>${escape(l.outcome)}</td><td>${escape(l.code ?? '')}${l.approval_id ? ` <a href="/admin/approvals/${escape(l.approval_id)}">${escape(l.approval_id)}</a>` : ''}</td></tr>`)
     .join('');
   return htmlResponse(
     200,
     'Broker admin',
     `<h1>Broker admin</h1><p class="muted">${escape(env.ENVIRONMENT)} · version ${escape(env.CF_VERSION?.id ?? 'local')}</p>
 <form method="post" action="/admin/logout"><button>Sign out</button></form>
+<h2>Waiting for your approval</h2>${approvalTable(pending, 'nothing pending')}
+<h2>Recent approvals</h2>${approvalTable(recent, 'none yet')}
 <h2>Connections</h2><div class="scroll"><table><tr><th>Client</th><th>Grants</th><th></th></tr>${rows || '<tr><td colspan="3" class="muted">none</td></tr>'}</table></div>
 <h2>Policy</h2><p class="muted">Source: ${escape(loaded.source)} · hash ${escape(loaded.hash)}</p><pre>${escape(JSON.stringify(loaded.policy.agents, null, 2))}</pre>
 <h2>Audit (latest 50)</h2><div class="scroll"><table><tr><th>Time (UTC)</th><th>Type</th><th>Agent</th><th>Tool</th><th>Outcome</th><th>Code</th></tr>${audits}</table></div>`,

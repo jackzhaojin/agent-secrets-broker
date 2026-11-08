@@ -1,21 +1,22 @@
 {
-  "version": 1,
-  "notes": "Which agent may call which tool. The owner picks the agent when approving a client on the consent page; the grant is bound to that agent. An admin override in KV (PUT /admin/api/policy) takes precedence until it is deleted.",
+  "version": 2,
+  "notes": "Which agent may call which tool. The owner picks the agent when approving a client on the consent page; the grant is bound to that agent. approval_required lists tools that need the owner's approval on every call for that agent (tools marked requiresApproval in code always do). An admin override in KV (PUT /admin/api/policy) takes precedence until it is deleted.",
   "agents": {
     "duet": {
       "description": "Claude Duet, through a claude.ai custom connector",
       "match_client_names": ["claude"],
-      "tools": ["whoami", "mockgit_list_my_repos"]
+      "tools": ["whoami", "mockgit_list_my_repos", "mockgit_get_readme", "mockgit_create_issue"]
     },
     "animamesh": {
-      "description": "AnimaMesh (Phase 2: its own OAuth client)",
+      "description": "AnimaMesh: repo counts only, nothing Duet can call",
       "match_client_names": ["animamesh"],
-      "tools": ["whoami"]
+      "tools": ["whoami", "mockgit_repo_stats"]
     },
     "inspector": {
       "description": "Manual testing with MCP Inspector or a scripted client",
       "match_client_names": ["inspector", "e2e"],
-      "tools": ["whoami", "mockgit_list_my_repos"]
+      "tools": ["whoami", "mockgit_list_my_repos", "mockgit_get_readme", "mockgit_create_issue"],
+      "approval_required": ["mockgit_get_readme"]
     }
   }
 }

@@ -25,9 +25,9 @@ The test it is built to pass: *Claude Duet asks the broker to do something that 
    - **Register automatically** (Dynamic Client Registration). The scripted test runs this path too, with the exact claude.ai callback URL (C1 to C7). If the first option fails, remove the connector and add it again with this one: Claude doesn't let you change auth settings after adding.
    - Leave client ID and secret empty.
 5. Click **Connect**. A window opens on the broker's consent page. Check that access goes to `claude.ai`, keep agent **duet** selected (it is preselected for clients named Claude), type the owner password, and press **Approve**.
-6. The connector shows as connected, with two tools: `whoami` and `mockgit_list_my_repos`.
+6. The connector shows as connected, with four tools: `whoami`, `mockgit_list_my_repos`, `mockgit_get_readme` and `mockgit_create_issue` (the last one needs your approval on every call).
 7. Ask Duet (or any Claude chat with the connector on) to run acceptance tests 2 to 4:
-   - "Call whoami on the Agent Secrets Broker." Expect agent `duet`, your client's name, and the two tools.
+   - "Call whoami on the Agent Secrets Broker." Expect agent `duet`, your client's name, the four tools, and `mockgit_create_issue` under approval_required.
    - "List my repos with the broker." Expect the 8 mock repos (`sandbox-alpha` to `sandbox-hotel`), each with only name, url and updated.
    - "Did any tool result contain an API key, token or password?" Expect no. (You can also check: the key values are in `.secrets/sandbox.json`; none should appear in the chat.)
 
@@ -74,11 +74,17 @@ Point it at the MCP URL. It needs Streamable HTTP and OAuth 2.1 with PKCE (S256)
 
 | Agent | Tools | For |
 |---|---|---|
-| `duet` | `whoami`, `mockgit_list_my_repos` | Claude Duet through a claude.ai connector |
-| `animamesh` | `whoami` | AnimaMesh (Phase 2 gives it its own client) |
-| `inspector` | `whoami`, `mockgit_list_my_repos` | MCP Inspector and scripted tests |
+| `duet` | `whoami`, `mockgit_list_my_repos`, `mockgit_get_readme`, `mockgit_create_issue` (approval) | Claude Duet through a claude.ai connector |
+| `animamesh` | `whoami`, `mockgit_repo_stats` | AnimaMesh: counts only, nothing Duet has (isolation tests) |
+| `inspector` | Duet's tools, with `mockgit_get_readme` also behind approval | MCP Inspector and scripted tests |
+
+Tools marked `requiresApproval` in code (`mockgit_create_issue`) need the owner's approval on every call; a policy's `approval_required` can add more per agent. See "Per-call approval" below.
 
 `policy.json` is bundled with each deploy. To change policy without a deploy, push an override (`npm run admin -- policy push edited.json`); `npm run admin -- policy reset` goes back to the file. A malformed override fails closed: no agent gets any tool.
+
+### Per-call approval
+
+A tool that needs approval answers its first call with `pending_approval`, an approval id and a link (`/admin/approvals/<id>`); nothing runs. The owner opens the link (signing in with the owner password returns to it), checks the arguments and presses **Approve once** or **Deny**. The agent then repeats the exact same call, which runs once. An approval is bound to the client, the agent, the tool and the exact arguments, lasts 15 minutes, and is single use; a denial stands for 15 minutes. Only the owner's password session can decide: an agent's OAuth token, the admin API token and the admin API itself cannot (the API lists approvals read-only). Approvals live in a Durable Object, so approve-then-run-once is atomic and takes effect at once. Notifications are the admin page only for now.
 
 ## Tests
 
@@ -145,8 +151,10 @@ From the spec: AnimaMesh as its own OAuth client (client credentials), upstream 
 ```
 src/index.ts          OAuthProvider wiring: routes, scopes, token lifetimes, CIMD, DCR
 src/app.ts            consent page, admin page and admin API, landing, healthz
-src/mcp.ts            MCP endpoint: policy-filtered tools, denied-call audit, redaction
-src/tools/index.ts    whoami, mockgit_list_my_repos
+src/mcp.ts            MCP endpoint: policy-filtered tools, approval gate, credential-in-arguments refusal, revocation check, redaction
+src/tools/            core.ts (whoami), mockgit.ts (sandbox tools), types.ts
+src/approvals.ts      per-call approval store (Durable Object)
+src/revocations.ts    revocation list (Durable Object): revoke takes effect at once
 src/secrets/store.ts  SecretStore interface, KV vault, in-memory cache
 src/policy.ts, policy.json, src/audit.ts, src/auth.ts, src/redact.ts, src/html.ts
 mock-upstream/        the Mock Git API Worker

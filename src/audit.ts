@@ -5,14 +5,16 @@ import type { Env } from './env';
  * only who, what, and how it went.
  */
 export interface AuditEvent {
-  type: 'tool_call' | 'consent' | 'revoke' | 'policy' | 'login_failed' | 'redaction';
-  outcome: 'ok' | 'error' | 'denied';
+  type: 'tool_call' | 'consent' | 'revoke' | 'policy' | 'login_failed' | 'redaction' | 'approval';
+  outcome: 'ok' | 'error' | 'denied' | 'pending';
   client_id?: string;
   client_name?: string;
   agent?: string;
   tool?: string;
   /** Short machine-readable reason, e.g. "upstream_401". Never free text from upstream. */
   code?: string;
+  /** Per-call approval this event belongs to. */
+  approval_id?: string;
   ms?: number;
 }
 

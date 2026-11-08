@@ -30,5 +30,17 @@
   // The mock upstream API is reached over a Service Binding (Workers on the same workers.dev
   // subdomain can't fetch each other by URL).
   "services": [{ "binding": "MOCKGIT", "service": "agent-secrets-broker-mockgit" }],
+  // Durable Objects (strongly consistent, unlike KV): per-call approvals, so "approve, then run
+  // once" is atomic; and the revocation list, so a revoke cuts every token off at once.
+  "durable_objects": {
+    "bindings": [
+      { "name": "APPROVALS", "class_name": "ApprovalStore" },
+      { "name": "REVOCATIONS", "class_name": "RevocationList" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ApprovalStore"] },
+    { "tag": "v2", "new_sqlite_classes": ["RevocationList"] }
+  ],
   "version_metadata": { "binding": "CF_VERSION" }
 }

@@ -5,6 +5,8 @@ export interface AgentPolicy {
   description?: string;
   match_client_names?: string[];
   tools: string[];
+  /** Tools that need the owner's approval on every call for this agent (on top of tools that always do). */
+  approval_required?: string[];
 }
 
 export interface Policy {
@@ -37,6 +39,9 @@ export function validatePolicy(input: unknown): Policy {
     }
     if (a.match_client_names !== undefined && !(Array.isArray(a.match_client_names) && a.match_client_names.every((s) => typeof s === 'string'))) {
       throw new Error(`agents.${id}.match_client_names must be an array of strings`);
+    }
+    if (a.approval_required !== undefined && !(Array.isArray(a.approval_required) && a.approval_required.every((t) => typeof t === 'string' && TOOL_ID.test(t)))) {
+      throw new Error(`agents.${id}.approval_required must be an array of tool names`);
     }
   }
   return input as Policy;
@@ -77,6 +82,10 @@ export async function clearPolicyOverride(env: Env): Promise<void> {
 
 export function allowedTools(loaded: LoadedPolicy, agent: string): string[] {
   return loaded.policy.agents[agent]?.tools ?? [];
+}
+
+export function policyRequiresApproval(loaded: LoadedPolicy, agent: string, tool: string): boolean {
+  return !!loaded.policy.agents[agent]?.approval_required?.includes(tool);
 }
 
 /** Agent to preselect on the consent page for a client name, if exactly one agent matches. */

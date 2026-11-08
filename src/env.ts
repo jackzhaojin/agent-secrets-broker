@@ -1,10 +1,14 @@
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
+import type { ApprovalStore } from './approvals';
+import type { RevocationList } from './revocations';
 
 export interface Env {
   OAUTH_KV: KVNamespace;
   BROKER_KV: KVNamespace;
   VAULT: KVNamespace;
   MOCKGIT: Fetcher;
+  APPROVALS: DurableObjectNamespace<ApprovalStore>;
+  REVOCATIONS: DurableObjectNamespace<RevocationList>;
   CF_VERSION?: { id: string; tag?: string; timestamp?: string };
   OAUTH_PROVIDER: OAuthHelpers;
 
