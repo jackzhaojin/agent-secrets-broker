@@ -1,4 +1,4 @@
-import bundled from '../policy.json';
+import { deployment } from './deployment';
 import type { Env } from './env';
 
 export interface AgentPolicy {
@@ -68,7 +68,7 @@ export async function loadPolicy(env: Env): Promise<LoadedPolicy> {
       return { policy: closed, source: 'kv-override', hash: 'invalid' };
     }
   }
-  const policy = validatePolicy(bundled);
+  const policy = validatePolicy(deployment().policy);
   return { policy, source: 'bundled', hash: await hashOf(policy) };
 }
 

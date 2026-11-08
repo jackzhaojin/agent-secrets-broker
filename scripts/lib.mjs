@@ -115,6 +115,22 @@ export function seed({ target, values }) {
   setUpstreamAccepted({ target, values, label: 'A' });
 }
 
+/**
+ * docs/test-log.md holds the sandbox run (test/e2e.mjs) and, below LIVE_HEADING, the live checks
+ * (test/live.mjs). Each script rewrites only its own part.
+ */
+export const TEST_LOG = join(ROOT, 'docs', 'test-log.md');
+export const LIVE_HEADING = '## Live broker';
+
+export function writeTestLog({ sandbox, live }) {
+  const current = existsSync(TEST_LOG) ? readFileSync(TEST_LOG, 'utf8') : '';
+  const at = current.indexOf(`\n${LIVE_HEADING}`);
+  const oldSandbox = at >= 0 ? current.slice(0, at) : current;
+  const oldLive = at >= 0 ? current.slice(at + 1) : '';
+  const parts = [(sandbox ?? oldSandbox).trimEnd(), (live ?? oldLive).trimEnd()].filter(Boolean);
+  writeFileSync(TEST_LOG, parts.join('\n\n') + '\n');
+}
+
 /** Every place a value could show up, searched for every dummy secret. Returns hit counts by label. */
 export function findSecrets(text, values) {
   const hits = {};

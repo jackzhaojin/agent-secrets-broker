@@ -4,14 +4,43 @@ A small service that holds secrets and makes API calls on behalf of AI agents. A
 
 The test it is built to pass: *Claude Duet asks the broker to do something that needs an API key, gets the result back, and the key never appears anywhere Duet can see.*
 
-**Status: proof of concept, sandbox only.** The deployed sandbox holds dummy test secrets (`TEST_SECRET_A` to `G` style values) and calls a mock upstream API that it hosts itself. All acceptance tests pass against the deployed URL; see [docs/test-log.md](docs/test-log.md).
+**Status: proof of concept.** Two deployments:
 
-| | |
-|---|---|
-| MCP server URL | `https://agent-secrets-broker-sandbox.jackzhaojin.workers.dev/mcp` |
-| Admin | `https://agent-secrets-broker-sandbox.jackzhaojin.workers.dev/admin` |
-| Mock upstream | `https://agent-secrets-broker-mockgit.jackzhaojin.workers.dev` |
-| Runtime | Cloudflare Workers (two Workers, four KV namespaces) |
+- **The sandbox** holds dummy test secrets (`TEST_SECRET_A` to `G` style values) and calls a mock upstream it hosts itself. It carries the mechanism tests: 40 of 40 pass against the deployed URL ([docs/test-log.md](docs/test-log.md)).
+- **The live broker** holds real credentials in 1Password and is waiting on Jack's account setup ([docs/live-setup.md](docs/live-setup.md)).
+
+Phase 2 results, negatives included, are in [docs/findings.md](docs/findings.md).
+
+## What the broker can and can't do
+
+**It can:**
+
+- **Call APIs with keys agents never see.** No tool returns a secret, token or credential, error messages included. A redactor scrubs every secret it has handled from anything it sends out.
+- **Give each agent its own tools.** The owner picks the agent when approving a connection. Each agent gets only its policy's tools, and other calls are refused and audited (Duet vs AnimaMesh, tested).
+- **Hold a call until the owner approves it.** Sensitive tools return "pending" until Jack approves that exact call on the admin page, and it then runs once. Only the owner's password session can approve, never an agent's token or the admin token.
+- **Contain a fooled agent.** Text from upstreams arrives marked untrusted. A call that tries to send out a credential (its own access token, a key) is refused, and writes wait for approval. A key embedded in upstream content is redacted.
+- **Cut a connection off at once.** Revoke takes effect on the next call and the next refresh, including tokens minted seconds earlier; that needed a fix, see findings D3.
+- **Rotate keys without a redeploy, and keep an audit trail.** The audit log records who called what and how it went, with no arguments, contents or tokens.
+- **Hold a user's own OAuth consent for an upstream (live, Adobe).** Jack consents on Adobe's page, and the broker stores the token encrypted and refreshes it. Built and deployed; the first real consent is pending.
+
+**It can't, or doesn't yet:**
+
+- **Stop an agent from being fooled.** It limits what a fooled agent can do; it can't stop the agent from believing injected text.
+- **Detect a stolen refresh token.** The thief and the real client can both refresh until the owner revokes; there's no reuse detection.
+- **Sign in with a username and password where the site forbids agents.** Best Buy's terms allow agents only through published methods, and there are none. Blocked, no attempt made (findings B).
+- **Solve CAPTCHAs, get past bot checks, or answer MFA prompts.** It doesn't, by design.
+- **Notify the owner of a pending approval.** Jack has to open the admin page; email or push needs an account.
+- **Limit an upstream token to less than the user's own rights.** Jack's Adobe token can write wherever he can; only the broker enforces the scratch folder.
+
+| | Sandbox | Live |
+|---|---|---|
+| MCP server URL | `https://agent-secrets-broker-sandbox.jackzhaojin.workers.dev/mcp` | `https://agent-secrets-broker-live.jackzhaojin.workers.dev/mcp` |
+| Admin | `.../admin` | `.../admin` (and `/connect/adobe`) |
+| Secrets | KV vault, dummy values A to G | 1Password vault `Broker`, read-only service account |
+| Tools | `whoami`, Mock Git tools | `whoami`, `da_list`, `da_get`, `da_put_draft` |
+| Upstream | Mock Git (`agent-secrets-broker-mockgit.jackzhaojin.workers.dev`) | Adobe da.live, a scratch folder Jack names |
+
+Runtime: Cloudflare Workers (three Workers, six KV namespaces, Durable Objects for approvals and revocations).
 
 ## Connect an agent
 
@@ -121,6 +150,16 @@ npm run test:e2e                  # writes docs/test-log.md
 npm run scan                      # before every push: dummy values, forbidden files, key shapes, gitleaks
 ```
 
+Live broker (real secrets; Jack sets `OP_SERVICE_ACCOUNT_TOKEN` and `OWNER_PASSWORD` himself, see [docs/live-setup.md](docs/live-setup.md)):
+
+```bash
+npm run deploy:live               # patches the 1Password SDK for workerd, deploys wrangler.live.jsonc
+npm run live -- init-keys         # ADMIN_TOKEN, COOKIE_SECRET, TOKEN_ENC_KEY: random, never printed
+npm run live -- status            # which secrets are set (names only)
+npm run test:live                 # live checks + Duet's calls from the audit log; add -- --tail 300 while Duet runs
+npm run admin -- --live audit     # the live audit log
+```
+
 Other sandbox commands: `npm run sandbox -- vault B --remote` (rotate the vault), `npm run sandbox -- upstream B --remote` (rotate what the upstream accepts), `npm run sandbox -- show` (labels and fingerprints). `npm run admin -- clients | audit | policy`.
 
 ## Security rules this follows
@@ -144,23 +183,41 @@ Other sandbox commands: `npm run sandbox -- vault B --remote` (rotate the vault)
 
 ## Phase 2
 
-From the spec: AnimaMesh as its own OAuth client (client credentials), upstream OAuth refresh tokens held by the broker, per-call approval for sensitive tools, key notes and a metadata-only `secrets_inventory` tool, agent-to-agent grants, and a Grok Bot connector test. Real secrets get their own deployment (a Worker without `-sandbox`) backed by 1Password.
+Done this phase:
+
+- Per-call approval.
+- Negative tests (prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs), plus the fixes they drove.
+- The live deployment on 1Password.
+- Adobe user-delegated OAuth with the DA tools.
+
+Results and the blocked Best Buy experiment are in [docs/findings.md](docs/findings.md).
+
+Still open:
+
+- **The real-account runs:** Jack's setup, Adobe consent, and Duet calling the live tools.
+- **From the original spec:** approval notifications, AnimaMesh as a client-credentials client, a metadata-only `secrets_inventory` tool, agent-to-agent grants, and a Grok Bot connector test.
 
 ## Layout
 
 ```
-src/index.ts          OAuthProvider wiring: routes, scopes, token lifetimes, CIMD, DCR
-src/app.ts            consent page, admin page and admin API, landing, healthz
+src/index.ts          sandbox entry: KV vault, Mock Git tools, policy.json
+src/live.ts           live entry: 1Password, DA tools, Adobe connect, daily refresh cron, policy.live.json
+src/worker.ts         OAuthProvider wiring: routes, scopes, token lifetimes, CIMD, DCR, refresh revocation check
+src/deployment.ts     what differs between the two deployments
+src/app.ts            consent page, admin page and admin API, approvals pages, landing, healthz
 src/mcp.ts            MCP endpoint: policy-filtered tools, approval gate, credential-in-arguments refusal, revocation check, redaction
-src/tools/            core.ts (whoami), mockgit.ts (sandbox tools), types.ts
+src/tools/            core.ts (whoami), mockgit.ts (sandbox), da.ts (live, da.live scratch folder), types.ts
+src/upstream/adobe.ts Adobe IMS user OAuth: /connect/adobe, token refresh, admin status
+src/sealed.ts         AES-GCM for upstream tokens at rest
 src/approvals.ts      per-call approval store (Durable Object)
 src/revocations.ts    revocation list (Durable Object): revoke takes effect at once
-src/secrets/store.ts  SecretStore interface, KV vault, in-memory cache
-src/policy.ts, policy.json, src/audit.ts, src/auth.ts, src/redact.ts, src/html.ts
+src/secrets/          store.ts (SecretStore, KV vault, cache), onepassword.ts (live)
+src/policy.ts, policy.json, policy.live.json, src/audit.ts, src/auth.ts, src/redact.ts, src/html.ts
 mock-upstream/        the Mock Git API Worker
-scripts/              sandbox secrets, admin CLI, secret scan
-test/e2e.mjs          the acceptance test
-docs/                 test log, 1Password notes
+scripts/              sandbox secrets, live keys, admin CLI, 1Password patch, secret scan
+test/e2e.mjs          the sandbox acceptance and negative tests
+test/live.mjs         checks against the live broker, and Duet's calls from its audit log
+docs/                 findings, test log, live setup, 1Password notes
 spikes/               1password-workers: the patched SDK running in workerd
 ```
 

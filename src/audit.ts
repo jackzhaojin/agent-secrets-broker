@@ -5,7 +5,7 @@ import type { Env } from './env';
  * only who, what, and how it went.
  */
 export interface AuditEvent {
-  type: 'tool_call' | 'consent' | 'revoke' | 'policy' | 'login_failed' | 'redaction' | 'approval';
+  type: 'tool_call' | 'consent' | 'revoke' | 'policy' | 'login_failed' | 'redaction' | 'approval' | 'upstream';
   outcome: 'ok' | 'error' | 'denied' | 'pending';
   client_id?: string;
   client_name?: string;

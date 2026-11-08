@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "notes": "Live broker (real accounts). Real-account tools are read-only this phase except da_put_draft, which writes a draft into the scratch folder and always needs the owner's approval. approval_required puts the DA reads behind approval too (each call). An admin override in KV (PUT /admin/api/policy) takes precedence until it is deleted.",
+  "agents": {
+    "duet": {
+      "description": "Claude Duet, through a claude.ai custom connector",
+      "match_client_names": ["claude"],
+      "tools": ["whoami", "da_list", "da_get", "da_put_draft"],
+      "approval_required": ["da_list", "da_get"]
+    },
+    "animamesh": {
+      "description": "AnimaMesh: no real-account tools yet",
+      "match_client_names": ["animamesh"],
+      "tools": ["whoami"]
+    },
+    "inspector": {
+      "description": "Scripted checks against the live broker: whoami only",
+      "match_client_names": ["inspector", "e2e"],
+      "tools": ["whoami"]
+    }
+  }
+}

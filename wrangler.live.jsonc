@@ -1,0 +1,44 @@
+// Agent Secrets Broker, LIVE deployment: real accounts, secrets in 1Password. Separate from the
+// sandbox (wrangler.jsonc) so real secrets never share a Worker, KV namespace or state with test
+// fixtures. Deploy with `npm run deploy:live` (it patches the 1Password SDK first).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-secrets-broker-live",
+  "main": "src/live.ts",
+  "compatibility_date": "2026-10-01",
+  // global_fetch_strictly_public: CIMD fetches (SSRF protection). nodejs_compat: the 1Password SDK.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  // The 1Password SDK's WASM glue, patched to load in workerd (scripts/patch-1password.mjs).
+  "alias": { "@1password/sdk-core": "./patched/sdk-core.mjs" },
+  "vars": {
+    "PUBLIC_BASE_URL": "https://agent-secrets-broker-live.jackzhaojin.workers.dev",
+    "ENVIRONMENT": "live",
+    "SECRET_CACHE_TTL_SECONDS": "300",
+    "OP_VAULT": "Broker",
+    // The only da.live folder the DA tools may touch ("org/site/folder"). Jack names it.
+    "DA_SCRATCH": ""
+  },
+  // Worker secrets, never committed:
+  //   OP_SERVICE_ACCOUNT_TOKEN  Jack, `wrangler secret put` (read-only service account, vault Broker)
+  //   OWNER_PASSWORD            Jack, `wrangler secret put`
+  //   ADMIN_TOKEN, COOKIE_SECRET, TOKEN_ENC_KEY  random, `npm run live -- init-keys` (never printed)
+  "kv_namespaces": [
+    // OAuth clients, grants and tokens (hashed), owned by @cloudflare/workers-oauth-provider
+    { "binding": "OAUTH_KV", "id": "8f8d8303c8594c0fbedc5c8ecd794dae" },
+    // Broker state: policy override, audit log, login rate limits, Adobe tokens (AES-GCM sealed)
+    { "binding": "BROKER_KV", "id": "1dc351047ffb4a0b849fd1d9741742cf" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "APPROVALS", "class_name": "ApprovalStore" },
+      { "name": "REVOCATIONS", "class_name": "RevocationList" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ApprovalStore", "RevocationList"] }],
+  // Daily: keep Jack's Adobe refresh token alive (Adobe expires it after 14 days without use).
+  "triggers": { "crons": ["17 9 * * *"] },
+  "version_metadata": { "binding": "CF_VERSION" }
+}

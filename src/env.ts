@@ -20,6 +20,16 @@ export interface Env {
   OWNER_PASSWORD: string;
   ADMIN_TOKEN: string;
   COOKIE_SECRET: string;
+
+  // Live deployment only (wrangler.live.jsonc)
+  /** 1Password service account token, read access to one vault. Set by Jack with `wrangler secret put`. */
+  OP_SERVICE_ACCOUNT_TOKEN?: string;
+  /** The 1Password vault the broker reads (default "Broker"). */
+  OP_VAULT?: string;
+  /** 32 random bytes, base64: encrypts upstream OAuth tokens at rest in KV. */
+  TOKEN_ENC_KEY?: string;
+  /** The only da.live folder the DA tools may touch: "org/site/folder". */
+  DA_SCRATCH?: string;
 }
 
 /** Stored (encrypted) with each grant; what the MCP handler sees as ctx.props. */

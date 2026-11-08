@@ -1,6 +1,7 @@
 import { AuthorizationError, CimdFetchError, type ConsentDescription, type GrantSummary } from '@cloudflare/workers-oauth-provider';
 import { approvals, displayStatus, type ApprovalRecord } from './approvals';
 import { audit, readAudit } from './audit';
+import { deployment } from './deployment';
 import { revocations } from './revocations';
 import { adminSessionCookie, checkOwnerPassword, clearAdminSessionCookie, hasAdminSession, hasAdminToken, sameOrigin } from './auth';
 import { OWNER_USER_ID, baseUrl, type Env, type GrantProps } from './env';
@@ -250,6 +251,17 @@ async function adminApi(request: Request, env: Env, ctx: ExecutionContext, path:
     const limit = Number(new URL(request.url).searchParams.get('limit') ?? '100');
     return json(200, { lines: await readAudit(env, limit) });
   }
+  if (path === '/admin/api/status' && request.method === 'GET') {
+    const loaded = await loadPolicy(env);
+    return json(200, {
+      environment: env.ENVIRONMENT,
+      deployment: deployment().name,
+      version: env.CF_VERSION?.id ?? 'local',
+      policy: { source: loaded.source, hash: loaded.hash },
+      owner_password_set: !!env.OWNER_PASSWORD,
+      ...(await deployment().status?.(env)),
+    });
+  }
   // Read-only on purpose: approving needs the owner's password session (see adminPage), so
   // nothing that holds only the admin token (a script, an agent on the owner's machine) can approve.
   if (path === '/admin/api/approvals' && request.method === 'GET') {
@@ -284,9 +296,9 @@ async function adminApi(request: Request, env: Env, ctx: ExecutionContext, path:
 }
 
 /** After sign-in, go back to the admin page that asked for it (an approval link), never elsewhere. */
-function adminReturnTo(value: unknown): string {
+export function adminReturnTo(value: unknown): string {
   const s = typeof value === 'string' ? value : '';
-  return /^\/admin(\/approvals\/[a-f0-9]{12})?$/.test(s) ? s : '/admin';
+  return /^\/admin(\/approvals\/[a-f0-9]{12})?$|^\/connect\/[a-z]+$/.test(s) ? s : '/admin';
 }
 
 const APPROVAL_PATH = /^\/admin\/approvals\/([a-f0-9]{12})$/;
@@ -319,6 +331,19 @@ function approvalPage(r: ApprovalRecord, now: number): string {
 <div class="scroll"><table>${args || '<tr><td class="muted">no arguments</td></tr>'}</table></div>${decide}`;
 }
 
+/** Owner sign-in; afterwards the browser returns to returnTo (an admin page, an approval, a /connect page). */
+export function signInPage(returnTo: string): Response {
+  return htmlResponse(
+    200,
+    'Broker admin',
+    `<h1>Broker admin</h1><form method="post" action="/admin/login"><p>Owner password</p>
+<input type="hidden" name="return_to" value="${escape(adminReturnTo(returnTo))}">
+<input type="text" name="username" value="owner" autocomplete="username" hidden>
+<input type="password" name="password" autocomplete="current-password" required aria-label="Owner password">
+<div class="row"><button class="primary">Sign in</button></div></form>`,
+  );
+}
+
 async function adminPage(request: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {
   if (path === '/admin/login' && request.method === 'POST') {
     if (!sameOrigin(env, request)) return htmlResponse(403, 'Forbidden', '<h1>Forbidden</h1>');
@@ -339,15 +364,7 @@ async function adminPage(request: Request, env: Env, ctx: ExecutionContext, path
   if (!signedIn) {
     // Posts (revoke, approve) need a session; a bearer token of any kind doesn't count.
     if (request.method !== 'GET') return htmlResponse(403, 'Forbidden', '<h1>Forbidden</h1><p>Sign in first.</p>');
-    return htmlResponse(
-      200,
-      'Broker admin',
-      `<h1>Broker admin</h1><form method="post" action="/admin/login"><p>Owner password</p>
-<input type="hidden" name="return_to" value="${escape(adminReturnTo(path))}">
-<input type="text" name="username" value="owner" autocomplete="username" hidden>
-<input type="password" name="password" autocomplete="current-password" required aria-label="Owner password">
-<div class="row"><button class="primary">Sign in</button></div></form>`,
-    );
+    return signInPage(path);
   }
 
   const approvalMatch = path.match(APPROVAL_PATH);
@@ -386,7 +403,13 @@ async function adminPage(request: Request, env: Env, ctx: ExecutionContext, path
     return new Response(null, { status: 303, headers: { location: '/admin' } });
   }
 
-  const [connections, lines, loaded, approvalList] = await Promise.all([listConnections(env), readAudit(env, 50), loadPolicy(env), approvals(env).list(20)]);
+  const [connections, lines, loaded, approvalList, extra] = await Promise.all([
+    listConnections(env),
+    readAudit(env, 50),
+    loadPolicy(env),
+    approvals(env).list(20),
+    deployment().adminSections?.(env) ?? Promise.resolve(''),
+  ]);
   const now = Date.now();
   const pending = approvalList.filter((r) => displayStatus(r, now) === 'pending');
   const recent = approvalList.filter((r) => displayStatus(r, now) !== 'pending').slice(0, 10);
@@ -412,6 +435,7 @@ ${c.kind === 'registered (DCR)' ? `<form method="post" action="/admin/revoke" st
 <form method="post" action="/admin/logout"><button>Sign out</button></form>
 <h2>Waiting for your approval</h2>${approvalTable(pending, 'nothing pending')}
 <h2>Recent approvals</h2>${approvalTable(recent, 'none yet')}
+${extra}
 <h2>Connections</h2><div class="scroll"><table><tr><th>Client</th><th>Grants</th><th></th></tr>${rows || '<tr><td colspan="3" class="muted">none</td></tr>'}</table></div>
 <h2>Policy</h2><p class="muted">Source: ${escape(loaded.source)} · hash ${escape(loaded.hash)}</p><pre>${escape(JSON.stringify(loaded.policy.agents, null, 2))}</pre>
 <h2>Audit (latest 50)</h2><div class="scroll"><table><tr><th>Time (UTC)</th><th>Type</th><th>Agent</th><th>Tool</th><th>Outcome</th><th>Code</th></tr>${audits}</table></div>`,
@@ -437,6 +461,8 @@ export const appHandler = {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    const extra = await deployment().routes?.(request, env, ctx);
+    if (extra) return extra;
     if (path === '/' && request.method === 'GET') return landing(env);
     if (path === '/healthz') {
       const loaded = await loadPolicy(env);

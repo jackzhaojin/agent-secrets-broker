@@ -1,10 +1,11 @@
+import { deployment } from '../deployment';
 import type { Env } from '../env';
 
 /**
  * Where secrets live. The broker asks for a secret by reference at call time and never hands it
- * to an agent. Two implementations are planned:
- *   - KvVault (this sandbox): a separate KV namespace holding dummy test secrets
- *   - 1Password (real secrets): see docs/1password.md
+ * to an agent. Two implementations:
+ *   - KvVault (sandbox): a separate KV namespace holding dummy test secrets
+ *   - OnePasswordStore (live, src/secrets/onepassword.ts): the Broker vault, read-only service account
  */
 export interface SecretStore {
   /** Returns the secret for a reference such as "mockgit/api_key", or null if it doesn't exist. */
@@ -60,5 +61,5 @@ export class CachedSecrets {
 
 export function secretsFor(env: Env): CachedSecrets {
   const ttlSeconds = Number(env.SECRET_CACHE_TTL_SECONDS ?? '300');
-  return new CachedSecrets(new KvVault(env.VAULT), (Number.isFinite(ttlSeconds) ? ttlSeconds : 300) * 1000);
+  return new CachedSecrets(deployment().secretStore(env), (Number.isFinite(ttlSeconds) ? ttlSeconds : 300) * 1000);
 }

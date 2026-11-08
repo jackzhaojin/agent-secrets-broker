@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import { ROLES, ROOT, fingerprint, findSecrets, loadSandbox, seed, setUpstreamAccepted, setVault, startProcess } from '../scripts/lib.mjs';
+import { ROLES, ROOT, fingerprint, findSecrets, loadSandbox, seed, setUpstreamAccepted, setVault, startProcess, writeTestLog } from '../scripts/lib.mjs';
 
 // ------------------------------------------------------------------------------------------------
 // Setup
@@ -939,7 +939,7 @@ Values live only in the gitignored \`.secrets/sandbox.json\`. Fingerprints are t
 |---|---|---|
 ${Object.entries(ROLES).map(([l, role]) => `| ${l} | \`${fingerprint(values[l])}\` | ${role} |`).join('\n')}
 `;
-  if (TARGET === 'remote') writeFileSync(join(ROOT, 'docs', 'test-log.md'), md);
+  if (TARGET === 'remote') writeTestLog({ sandbox: md });
   writeFileSync(join(OUT_DIR, `test-log-${TARGET}.md`), md);
   console.log(`\n${pass} passed, ${fail} failed. Report: ${TARGET === 'remote' ? 'docs/test-log.md' : `test-output/test-log-${TARGET}.md`}`);
   return fail;
