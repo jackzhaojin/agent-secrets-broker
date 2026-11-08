@@ -31,6 +31,10 @@ const BASE = (arg('base', TARGET === 'local' ? 'http://localhost:8787' : 'https:
 const MCP = `${BASE}/mcp`;
 const CLAUDE_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
 const CLAUDE_CODE_CIMD = 'https://claude.ai/oauth/claude-code-client-metadata';
+// The Claude app's own client metadata documents (claude.ai, desktop, mobile): a public client
+// (token_endpoint_auth_method none) and a confidential one (private_key_jwt, ES256).
+const CLAUDE_AI_CIMD = 'https://claude.ai/oauth/mcp-oauth-client-metadata';
+const CLAUDE_AI_CIMD_CONFIDENTIAL = `${CLAUDE_AI_CIMD}/confidential_client`;
 const STARTED = new Date();
 const STAMP = STARTED.toISOString().replace(/[:.]/g, '-');
 const OUT_DIR = join(ROOT, 'test-output');
@@ -240,6 +244,19 @@ async function admin(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+/**
+ * Grant IDs the owner has given a client. A CIMD client ID is shared by every installation of that
+ * app (Jack's own Claude connector included), so CIMD checks revoke only the grants they created.
+ */
+async function grantIds(clientId) {
+  const conns = await admin('GET', 'clients');
+  return new Set(conns.body.connections?.find((c) => c.client_id === clientId)?.grants.map((g) => g.id) ?? []);
+}
+
+async function cleanupNewGrants(clientId, before) {
+  for (const id of await grantIds(clientId)) if (!before.has(id)) state.cleanup.push({ client_id: clientId, grant_id: id });
 }
 
 const health = async () => (await (await tfetch(`${BASE}/healthz`)).json());
@@ -491,6 +508,7 @@ async function main() {
   // ---- CIMD: Anthropic's published Claude Code client metadata document ------------------------
   await check('M1', "CIMD: Claude Code's published client ID works end to end (bound to agent inspector)", async () => {
     const redirectUri = 'http://localhost:43210/callback';
+    const before = await grantIds(CLAUDE_CODE_CIMD);
     const { verifier, challenge } = pkce();
     const st = b64url(randomBytes(12));
     const consent = await openConsent(authorizeUrl({ clientId: CLAUDE_CODE_CIMD, redirectUri, challenge, state: st }));
@@ -499,15 +517,57 @@ async function main() {
     expect(consent.html.includes('localhost'), 'loopback warning missing');
     const done = await submitConsent(consent, { agent: 'inspector', password: OWNER_PASSWORD });
     expect(done.status === 302, `approve HTTP ${done.status}`);
+    await cleanupNewGrants(CLAUDE_CODE_CIMD, before);
     const code = new URL(done.location).searchParams.get('code');
     const tok = await token({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, client_id: CLAUDE_CODE_CIMD, code_verifier: verifier, resource: MCP });
     expect(tok.status === 200, `token HTTP ${tok.status} ${tok.body.error ?? ''}`);
     const who = await callTool(tok.body.access_token, 'whoami');
     expect(who.data?.agent === 'inspector' && who.data?.client?.name === 'Claude Code', `whoami ${who.text.slice(0, 100)}`);
-    const conns = await admin('GET', 'clients');
-    const mine = conns.body.connections.find((c) => c.client_id === CLAUDE_CODE_CIMD)?.grants.filter((g) => new Date(g.created_at) >= new Date(STARTED.getTime() - 60_000)) ?? [];
-    for (const g of mine) state.cleanup.push({ client_id: CLAUDE_CODE_CIMD, grant_id: g.id });
     return `consent shows "Published by claude.ai"; token issued; whoami client "Claude Code", agent inspector`;
+  });
+
+  // ---- CIMD: the Claude app's own client metadata documents (what acceptance test 1 uses) -------
+  await check('M2', "CIMD: claude.ai's published client ID (the Claude app's default) works end to end as duet", async () => {
+    const before = await grantIds(CLAUDE_AI_CIMD);
+    const { verifier, challenge } = pkce();
+    const st = b64url(randomBytes(12));
+    const consent = await openConsent(authorizeUrl({ clientId: CLAUDE_AI_CIMD, redirectUri: CLAUDE_CALLBACK, challenge, state: st }));
+    expect(consent.status === 200, `consent HTTP ${consent.status}: ${consent.html.slice(0, 200)}`);
+    expect(consent.html.includes('Published by <strong>claude.ai</strong>'), 'CIMD domain not shown');
+    expect(consent.html.includes('Access goes to <strong>claude.ai</strong>'), 'redirect host not shown');
+    expect(!consent.html.includes('class="warn"'), 'unexpected loopback warning');
+    expect(consent.html.includes('value="duet" required checked'), 'duet not preselected');
+    const done = await submitConsent(consent, { agent: 'duet', password: OWNER_PASSWORD });
+    expect(done.status === 302 && done.location, `approve HTTP ${done.status}`);
+    await cleanupNewGrants(CLAUDE_AI_CIMD, before);
+    const loc = new URL(done.location);
+    expect(`${loc.origin}${loc.pathname}` === CLAUDE_CALLBACK, `redirected to ${loc.origin}${loc.pathname}`);
+    expect(loc.searchParams.get('state') === st && loc.searchParams.get('iss') === BASE, 'state or iss mismatch');
+    const tok = await token({ grant_type: 'authorization_code', code: loc.searchParams.get('code'), redirect_uri: CLAUDE_CALLBACK, client_id: CLAUDE_AI_CIMD, code_verifier: verifier, resource: MCP });
+    expect(tok.status === 200 && tok.body.expires_in === 900 && tok.body.refresh_token, `token HTTP ${tok.status} ${tok.body.error ?? ''}`);
+    const ref = await token({ grant_type: 'refresh_token', refresh_token: tok.body.refresh_token, client_id: CLAUDE_AI_CIMD, resource: MCP });
+    expect(ref.status === 200 && ref.body.access_token && ref.body.refresh_token && ref.body.refresh_token !== tok.body.refresh_token, `refresh HTTP ${ref.status} ${ref.body.error ?? ''}`);
+    const who = await callTool(ref.body.access_token, 'whoami');
+    expect(who.data?.agent === 'duet' && who.data?.client?.name === 'Claude', `whoami ${who.text.slice(0, 100)}`);
+    const repos = await callTool(ref.body.access_token, 'mockgit_list_my_repos', { limit: 2 });
+    expect(!repos.isError && repos.data?.count === 2, `repo list ${repos.text.slice(0, 100)}`);
+    return 'consent "Published by claude.ai", access to claude.ai, duet preselected; public-client token (900s), refresh rotated; whoami client "Claude", agent duet; repo list OK';
+  });
+  await check('M3', "CIMD: claude.ai's confidential client ID gets consent, and its code needs Claude's signed assertion", async () => {
+    const before = await grantIds(CLAUDE_AI_CIMD_CONFIDENTIAL);
+    const { verifier, challenge } = pkce();
+    const consent = await openConsent(authorizeUrl({ clientId: CLAUDE_AI_CIMD_CONFIDENTIAL, redirectUri: CLAUDE_CALLBACK, challenge, state: b64url(randomBytes(12)) }));
+    expect(consent.status === 200, `consent HTTP ${consent.status}: ${consent.html.slice(0, 200)}`);
+    expect(consent.html.includes('Published by <strong>claude.ai</strong>'), 'CIMD domain not shown');
+    expect(consent.html.includes('value="duet" required checked'), 'duet not preselected');
+    const done = await submitConsent(consent, { agent: 'duet', password: OWNER_PASSWORD });
+    expect(done.status === 302 && done.location, `approve HTTP ${done.status}`);
+    await cleanupNewGrants(CLAUDE_AI_CIMD_CONFIDENTIAL, before);
+    const code = new URL(done.location).searchParams.get('code');
+    expect(code, 'no code');
+    const tok = await token({ grant_type: 'authorization_code', code, redirect_uri: CLAUDE_CALLBACK, client_id: CLAUDE_AI_CIMD_CONFIDENTIAL, code_verifier: verifier, resource: MCP });
+    expect([400, 401].includes(tok.status) && tok.body.error === 'invalid_client' && !tok.body.access_token, `unsigned exchange: HTTP ${tok.status} ${tok.body.error ?? ''}`);
+    return `consent "Published by claude.ai", duet preselected; a code exchange without a private_key_jwt assertion is refused (HTTP ${tok.status} invalid_client). Signing as Claude can't be tested from here`;
   });
 
   // ---- A stock MCP SDK client with its own OAuth discovery (as Inspector / Claude Code do) -----
@@ -637,6 +697,7 @@ function writeReport() {
   const spec = {
     T2: 'Acceptance 2', T3: 'Acceptance 3', T4a: 'Acceptance 4', T4b: 'Acceptance 4', T5: 'Acceptance 5', T6: 'Acceptance 6', T7: 'Acceptance 7',
     L1: 'Acceptance 4', L2: 'Acceptance 4', L3: 'Acceptance 4', C1: 'Acceptance 1 (scripted)', C2: 'Acceptance 1 (scripted)', C4: 'Acceptance 1 (scripted)', C5: 'Acceptance 1 (scripted)',
+    M2: 'Acceptance 1 (scripted)',
   };
   const md = `# Test log: ${TARGET === 'remote' ? 'deployed sandbox' : 'local wrangler dev'}
 
@@ -656,7 +717,7 @@ Generated by \`node test/e2e.mjs --target ${TARGET}\`. Do not edit by hand; reru
 |---|---|---|---|---|
 ${results.map((r) => `| ${r.id} | ${spec[r.id] ?? ''} | ${esc(r.name)} | ${r.status} | ${esc(r.detail)} |`).join('\n')}
 
-Acceptance test 1 (adding the connector in the Claude app) needs Jack in the app. C1 to C7 do the same protocol steps with the same callback URL (\`${CLAUDE_CALLBACK}\`).
+Acceptance test 1 (adding the connector in the Claude app) needs Jack in the app. C1 to C7 do the same protocol steps with the same callback URL (\`${CLAUDE_CALLBACK}\`) through Dynamic Client Registration, and M2 does them with the Claude app's own published client ID (\`${CLAUDE_AI_CIMD}\`). M3 covers its confidential variant up to the signed assertion, which only Claude can produce.
 
 ## Dummy secrets searched for
 

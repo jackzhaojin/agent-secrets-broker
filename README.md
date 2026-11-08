@@ -18,11 +18,11 @@ The test it is built to pass: *Claude Duet asks the broker to do something that 
 ### Claude (claude.ai, desktop, mobile, and Duet if it shares claude.ai connectors)
 
 1. Get the sandbox owner password on the Mac that holds this repo: `npm run sandbox -- owner-password` (it reads the gitignored `.secrets/sandbox.json`). It is a dummy value, but keep it to yourself: anyone with it can approve a connection.
-2. In the Claude app go to **Settings > Connectors > Add custom connector**.
+2. In claude.ai go to **Customize > Connectors** (`https://claude.ai/customize/connectors`; some app builds call it **Settings > Connectors**) and add a custom connector.
 3. Name: `Agent Secrets Broker (sandbox)`. URL: `https://agent-secrets-broker-sandbox.jackzhaojin.workers.dev/mcp`
 4. OAuth client: either option works. The broker supports both.
-   - **Use Claude's published identity** (Claude's default, a Client ID Metadata Document). The consent page will then say "Published by claude.ai".
-   - **Register automatically** (Dynamic Client Registration). This is the path the scripted test runs with the exact claude.ai callback URL. If the first option fails, remove the connector and add it again with this one: Claude doesn't let you change auth settings after adding.
+   - **Use Claude's published identity** (Claude's default, a Client ID Metadata Document). Claude's client ID is `https://claude.ai/oauth/mcp-oauth-client-metadata`, or its `/confidential_client` variant, which signs its token requests. The consent page will then say "Published by claude.ai". The scripted test runs this path end to end with the public document (M2), and the confidential one up to the signature only Claude can make (M3).
+   - **Register automatically** (Dynamic Client Registration). The scripted test runs this path too, with the exact claude.ai callback URL (C1 to C7). If the first option fails, remove the connector and add it again with this one: Claude doesn't let you change auth settings after adding.
    - Leave client ID and secret empty.
 5. Click **Connect**. A window opens on the broker's consent page. Check that access goes to `claude.ai`, keep agent **duet** selected (it is preselected for clients named Claude), type the owner password, and press **Approve**.
 6. The connector shows as connected, with two tools: `whoami` and `mockgit_list_my_repos`.
@@ -89,7 +89,7 @@ It acts as the agent's MCP client and as the owner:
 - **Discovery**: the 401 challenge, both metadata documents, a made-up token refused.
 - **Connect like the Claude app**: DCR with `https://claude.ai/api/mcp/auth_callback`, the consent page (wrong password refused, right password approved), the PKCE code exchange, code replay refused (which also revokes that code's tokens), then MCP initialize and tools/list with the official SDK client.
 - **Acceptance tests 2 to 7** from the spec, against the deployed URL.
-- **CIMD with Anthropic's real document**: `https://claude.ai/oauth/claude-code-client-metadata` (Claude Code's published client ID).
+- **CIMD with Anthropic's real documents**: `https://claude.ai/oauth/claude-code-client-metadata` (Claude Code's published client ID, M1), and the Claude app's own `https://claude.ai/oauth/mcp-oauth-client-metadata` bound to `duet`, through token, refresh and both tools (M2). Its `/confidential_client` variant gets the consent page, and its code is refused without Claude's signed assertion (M3). Each CIMD check revokes only the grants it created, because a CIMD client ID is shared by every install of that app, Jack's own connector included.
 - **A stock MCP SDK client** that discovers auth from the 401 by itself, the way MCP Inspector and Claude Code do.
 - **No-leak sweep**: every response body and header (errors included), the audit log, and the Worker's own logs from `wrangler tail`, searched for all seven dummy values. A control check first proves the scan finds the values in the mock upstream's own careless responses.
 
@@ -131,7 +131,7 @@ Other sandbox commands: `npm run sandbox -- vault B --remote` (rotate the vault)
 
 | Question | Answer |
 |---|---|
-| What OAuth does a Claude custom connector expect? | Callback `https://claude.ai/api/mcp/auth_callback`. Claude prefers a Client ID Metadata Document when the server advertises `client_id_metadata_document_supported` and the `none` auth method, else falls back to DCR. It needs a 401 with `resource_metadata`, a protected resource whose `resource` is the MCP URL as entered, PKCE S256, and a form-urlencoded token endpoint. Traffic comes from `160.79.104.0/21`, IPv4 only. Source: claude.com/docs/connectors/building/authentication. |
+| What OAuth does a Claude custom connector expect? | Callback `https://claude.ai/api/mcp/auth_callback`. Claude prefers a Client ID Metadata Document when the server advertises `client_id_metadata_document_supported` and the `none` auth method, else falls back to DCR. It needs a 401 with `resource_metadata`, a protected resource whose `resource` is the MCP URL as entered, PKCE S256, and a form-urlencoded token endpoint. Traffic comes from `160.79.104.0/21`, IPv4 only. Source: claude.com/docs/connectors/building/authentication. The docs don't name the Claude app's client ID; it is `https://claude.ai/oauth/mcp-oauth-client-metadata` (public, `none`), plus `.../confidential_client` (`private_key_jwt`, ES256, keys at `https://claude.ai/v1/mcp/jwks`) for servers that list `private_key_jwt`, as this one does. Both reach the consent page on the deployed broker, and the public one works end to end (M2, M3). |
 | Can Duet add a connector itself? | Not verified. Connectors are added in the Claude app's settings; whether Duet sees claude.ai connectors needs Jack's check in step 7 above. |
 | Does the 1Password JS SDK run in Workers? | Not as published (its WASM core is read with `fs.readFileSync` and compiled at runtime, which Workers forbid). **Yes with a build-time patch**: verified in workerd, where the core runs and reaches 1Password's sign-in endpoint. 4.1 MB gzipped, so Workers Paid. See [docs/1password.md](docs/1password.md) and [spikes/1password-workers](spikes/1password-workers). |
 | Can Grok Bot, Muse or Dots use remote MCP? | Not checked (out of the baseline). |
