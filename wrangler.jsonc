@@ -1,0 +1,34 @@
+// Agent Secrets Broker, sandbox deployment (dummy secrets only).
+// A production deployment with real secrets would be a separate Worker without "-sandbox".
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-secrets-broker-sandbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // global_fetch_strictly_public is required for Client ID Metadata Document fetches (SSRF protection).
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "vars": {
+    "PUBLIC_BASE_URL": "https://agent-secrets-broker-sandbox.jackzhaojin.workers.dev",
+    "ENVIRONMENT": "sandbox",
+    "SECRET_CACHE_TTL_SECONDS": "300"
+  },
+  // Worker secrets (set with `npm run sandbox -- push --remote`, never committed):
+  //   OWNER_PASSWORD  consent page and /admin login
+  //   ADMIN_TOKEN     bearer token for /admin/api/*
+  //   COOKIE_SECRET   signs the /admin session cookie
+  "kv_namespaces": [
+    // OAuth clients, grants and tokens (hashed), owned by @cloudflare/workers-oauth-provider
+    { "binding": "OAUTH_KV", "id": "e1eed77615b543cc8679765831fe8c15" },
+    // Broker state: policy override, audit log, login rate limits
+    { "binding": "BROKER_KV", "id": "a4ff18710a4043dfa56a11ba9eb2ad6b" },
+    // Stand-in vault holding the dummy upstream secrets (1Password replaces this for real secrets)
+    { "binding": "VAULT", "id": "e3d1bdf82b4d45af815dc5fef3366dcc" }
+  ],
+  // The mock upstream API is reached over a Service Binding (Workers on the same workers.dev
+  // subdomain can't fetch each other by URL).
+  "services": [{ "binding": "MOCKGIT", "service": "agent-secrets-broker-mockgit" }],
+  "version_metadata": { "binding": "CF_VERSION" }
+}

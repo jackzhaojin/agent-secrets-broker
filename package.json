@@ -1,0 +1,31 @@
+{
+  "name": "agent-secrets-broker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A remote MCP server that holds secrets and calls APIs on behalf of AI agents, so agents never see a key.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "wrangler dev -c wrangler.jsonc -c mock-upstream/wrangler.jsonc --persist-to .wrangler/state --port 8787",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy -c mock-upstream/wrangler.jsonc && wrangler deploy -c wrangler.jsonc",
+    "sandbox": "node scripts/sandbox.mjs",
+    "admin": "node scripts/admin.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "scan": "node scripts/secret-scan.mjs"
+  },
+  "dependencies": {
+    "@cfworker/json-schema": "4.1.6",
+    "@cloudflare/workers-oauth-provider": "1.2.4",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261108.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.158.0"
+  }
+}

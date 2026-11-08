@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "notes": "Which agent may call which tool. The owner picks the agent when approving a client on the consent page; the grant is bound to that agent. An admin override in KV (PUT /admin/api/policy) takes precedence until it is deleted.",
+  "agents": {
+    "duet": {
+      "description": "Claude Duet, through a claude.ai custom connector",
+      "match_client_names": ["claude"],
+      "tools": ["whoami", "mockgit_list_my_repos"]
+    },
+    "animamesh": {
+      "description": "AnimaMesh (Phase 2: its own OAuth client)",
+      "match_client_names": ["animamesh"],
+      "tools": ["whoami"]
+    },
+    "inspector": {
+      "description": "Manual testing with MCP Inspector or a scripted client",
+      "match_client_names": ["inspector", "e2e"],
+      "tools": ["whoami", "mockgit_list_my_repos"]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+// Mock upstream API ("Mock Git"): a stand-in for GitHub that only answers when it gets the right key.
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "agent-secrets-broker-mockgit",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "kv_namespaces": [
+    // accepted_key: the one API key this upstream currently accepts
+    { "binding": "MOCK_KV", "id": "cbf67ceade1b4ad7b4c5e919a4547ac3" }
+  ]
+}

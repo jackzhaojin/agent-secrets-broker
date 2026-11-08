@@ -1,0 +1,17 @@
+{
+  "name": "onepassword-workers-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "patch": "node scripts/patch-sdk-core.mjs",
+    "patch:lazy": "node scripts/patch-sdk-core.mjs --lazy",
+    "dev": "wrangler dev --port 8791",
+    "size": "wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "@1password/sdk": "0.5.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.158.0"
+  }
+}
