@@ -251,16 +251,16 @@ async function admin(method, path, body) {
 }
 
 /**
- * Grant IDs the owner has given a client. A CIMD client ID is shared by every installation of that
- * app (Jack's own Claude connector included), so CIMD checks revoke only the grants they created.
+ * Queue the grant a consent just created for revoking at the end. A CIMD client ID is shared by
+ * every installation of that app (Jack's own Claude connector included), so CIMD checks revoke only
+ * their own grant. Its ID comes from the authorization code (`<userId>:<grantId>:<secret>`): a
+ * before/after diff of the grant listing missed grants because KV listings lag (two stray test
+ * grants were left on 2026-11-08).
  */
-async function grantIds(clientId) {
-  const conns = await admin('GET', 'clients');
-  return new Set(conns.body.connections?.find((c) => c.client_id === clientId)?.grants.map((g) => g.id) ?? []);
-}
-
-async function cleanupNewGrants(clientId, before) {
-  for (const id of await grantIds(clientId)) if (!before.has(id)) state.cleanup.push({ client_id: clientId, grant_id: id });
+function cleanupGrantOf(clientId, redirectLocation) {
+  const grantId = new URL(redirectLocation).searchParams.get('code')?.split(':')[1];
+  expect(grantId, 'no grant id in the authorization code');
+  state.cleanup.push({ client_id: clientId, grant_id: grantId });
 }
 
 /** A fresh DCR client connected as an agent (a second app, or a thief's copy of one). */
@@ -709,7 +709,6 @@ async function main() {
   // ---- CIMD: Anthropic's published Claude Code client metadata document ------------------------
   await check('M1', "CIMD: Claude Code's published client ID works end to end (bound to agent inspector)", async () => {
     const redirectUri = 'http://localhost:43210/callback';
-    const before = await grantIds(CLAUDE_CODE_CIMD);
     const { verifier, challenge } = pkce();
     const st = b64url(randomBytes(12));
     const consent = await openConsent(authorizeUrl({ clientId: CLAUDE_CODE_CIMD, redirectUri, challenge, state: st }));
@@ -718,7 +717,7 @@ async function main() {
     expect(consent.html.includes('localhost'), 'loopback warning missing');
     const done = await submitConsent(consent, { agent: 'inspector', password: OWNER_PASSWORD });
     expect(done.status === 302, `approve HTTP ${done.status}`);
-    await cleanupNewGrants(CLAUDE_CODE_CIMD, before);
+    cleanupGrantOf(CLAUDE_CODE_CIMD, done.location);
     const code = new URL(done.location).searchParams.get('code');
     const tok = await token({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, client_id: CLAUDE_CODE_CIMD, code_verifier: verifier, resource: MCP });
     expect(tok.status === 200, `token HTTP ${tok.status} ${tok.body.error ?? ''}`);
@@ -729,7 +728,6 @@ async function main() {
 
   // ---- CIMD: the Claude app's own client metadata documents (what acceptance test 1 uses) -------
   await check('M2', "CIMD: claude.ai's published client ID (the Claude app's default) works end to end as duet", async () => {
-    const before = await grantIds(CLAUDE_AI_CIMD);
     const { verifier, challenge } = pkce();
     const st = b64url(randomBytes(12));
     const consent = await openConsent(authorizeUrl({ clientId: CLAUDE_AI_CIMD, redirectUri: CLAUDE_CALLBACK, challenge, state: st }));
@@ -740,7 +738,7 @@ async function main() {
     expect(consent.html.includes('value="duet" required checked'), 'duet not preselected');
     const done = await submitConsent(consent, { agent: 'duet', password: OWNER_PASSWORD });
     expect(done.status === 302 && done.location, `approve HTTP ${done.status}`);
-    await cleanupNewGrants(CLAUDE_AI_CIMD, before);
+    cleanupGrantOf(CLAUDE_AI_CIMD, done.location);
     const loc = new URL(done.location);
     expect(`${loc.origin}${loc.pathname}` === CLAUDE_CALLBACK, `redirected to ${loc.origin}${loc.pathname}`);
     expect(loc.searchParams.get('state') === st && loc.searchParams.get('iss') === BASE, 'state or iss mismatch');
@@ -755,7 +753,6 @@ async function main() {
     return 'consent "Published by claude.ai", access to claude.ai, duet preselected; public-client token (900s), refresh rotated; whoami client "Claude", agent duet; repo list OK';
   });
   await check('M3', "CIMD: claude.ai's confidential client ID gets consent, and its code needs Claude's signed assertion", async () => {
-    const before = await grantIds(CLAUDE_AI_CIMD_CONFIDENTIAL);
     const { verifier, challenge } = pkce();
     const consent = await openConsent(authorizeUrl({ clientId: CLAUDE_AI_CIMD_CONFIDENTIAL, redirectUri: CLAUDE_CALLBACK, challenge, state: b64url(randomBytes(12)) }));
     expect(consent.status === 200, `consent HTTP ${consent.status}: ${consent.html.slice(0, 200)}`);
@@ -763,7 +760,7 @@ async function main() {
     expect(consent.html.includes('value="duet" required checked'), 'duet not preselected');
     const done = await submitConsent(consent, { agent: 'duet', password: OWNER_PASSWORD });
     expect(done.status === 302 && done.location, `approve HTTP ${done.status}`);
-    await cleanupNewGrants(CLAUDE_AI_CIMD_CONFIDENTIAL, before);
+    cleanupGrantOf(CLAUDE_AI_CIMD_CONFIDENTIAL, done.location);
     const code = new URL(done.location).searchParams.get('code');
     expect(code, 'no code');
     const tok = await token({ grant_type: 'authorization_code', code, redirect_uri: CLAUDE_CALLBACK, client_id: CLAUDE_AI_CIMD_CONFIDENTIAL, code_verifier: verifier, resource: MCP });

@@ -116,18 +116,24 @@ export function seed({ target, values }) {
 }
 
 /**
- * docs/test-log.md holds the sandbox run (test/e2e.mjs) and, below LIVE_HEADING, the live checks
+ * docs/test-log.md: the sandbox e2e run on top (test/e2e.mjs), then one section per heading in
+ * SECTION_ORDER: Claude Duet's own calls on the sandbox (test/duet.mjs), then the live checks
  * (test/live.mjs). Each script rewrites only its own part.
  */
 export const TEST_LOG = join(ROOT, 'docs', 'test-log.md');
+export const DUET_HEADING = '## Claude Duet on the sandbox';
 export const LIVE_HEADING = '## Live broker';
+const SECTION_ORDER = [DUET_HEADING, LIVE_HEADING];
 
-export function writeTestLog({ sandbox, live }) {
+export function writeTestLog({ sandbox, sections = {} }) {
   const current = existsSync(TEST_LOG) ? readFileSync(TEST_LOG, 'utf8') : '';
-  const at = current.indexOf(`\n${LIVE_HEADING}`);
-  const oldSandbox = at >= 0 ? current.slice(0, at) : current;
-  const oldLive = at >= 0 ? current.slice(at + 1) : '';
-  const parts = [(sandbox ?? oldSandbox).trimEnd(), (live ?? oldLive).trimEnd()].filter(Boolean);
+  const found = SECTION_ORDER.map((h) => [h, current.indexOf(`\n${h}\n`)]).filter(([, i]) => i >= 0).sort((a, b) => a[1] - b[1]);
+  const top = found.length ? current.slice(0, found[0][1]) : current;
+  const old = {};
+  found.forEach(([h, i], k) => {
+    old[h] = current.slice(i + 1, k + 1 < found.length ? found[k + 1][1] : undefined);
+  });
+  const parts = [(sandbox ?? top).trimEnd(), ...SECTION_ORDER.map((h) => (sections[h] ?? old[h] ?? '').trimEnd())].filter(Boolean);
   writeFileSync(TEST_LOG, parts.join('\n\n') + '\n');
 }
 

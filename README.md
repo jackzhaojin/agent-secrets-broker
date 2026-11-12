@@ -31,6 +31,7 @@ Phase 2 results, negatives included, are in [docs/findings.md](docs/findings.md)
 - **Solve CAPTCHAs, get past bot checks, or answer MFA prompts.** It doesn't, by design.
 - **Notify the owner of a pending approval.** Jack has to open the admin page; email or push needs an account.
 - **Limit an upstream token to less than the user's own rights.** Jack's Adobe token can write wherever he can; only the broker enforces the scratch folder.
+- **Tell people apart.** There is one owner. The OAuth client ID identifies the app (every Claude user presents the same published ID), not the person, and every connection is approved with the one owner password. Separate users with their own permissions, accounts and approvals would need per-person sign-in on the consent page (for example Google sign-in for an allow-list of emails). Not built.
 
 | | Sandbox | Live |
 |---|---|---|
@@ -44,7 +45,7 @@ Runtime: Cloudflare Workers (three Workers, six KV namespaces, Durable Objects f
 
 ## Connect an agent
 
-### Claude (claude.ai, desktop, mobile, and Duet if it shares claude.ai connectors)
+### Claude (claude.ai, desktop, mobile and Claude Duet)
 
 1. Get the sandbox owner password on the Mac that holds this repo: `npm run sandbox -- owner-password` (it reads the gitignored `.secrets/sandbox.json`). It is a dummy value, but keep it to yourself: anyone with it can approve a connection.
 2. In claude.ai go to **Customize > Connectors** (`https://claude.ai/customize/connectors`; some app builds call it **Settings > Connectors**) and add a custom connector.
@@ -119,6 +120,8 @@ A tool that needs approval answers its first call with `pending_approval`, an ap
 
 `npm run test:e2e` (default `--target remote`) runs the whole flow against the deployed sandbox and writes [docs/test-log.md](docs/test-log.md). `--target local` runs it against `npm run dev`.
 
+`npm run test:duet -- --since <ISO time>` reads Claude Duet's own calls on the sandbox from the audit log (the connection Jack added in claude.ai) and writes them to the "Claude Duet on the sandbox" section of the test log. Pick a window with no e2e run in it: the e2e's M2 check also connects as duet with the Claude app's client ID.
+
 It acts as the agent's MCP client and as the owner:
 
 - **Discovery**: the 401 challenge, both metadata documents, a made-up token refused.
@@ -177,7 +180,7 @@ Other sandbox commands: `npm run sandbox -- vault B --remote` (rotate the vault)
 | Question | Answer |
 |---|---|
 | What OAuth does a Claude custom connector expect? | Callback `https://claude.ai/api/mcp/auth_callback`. Claude prefers a Client ID Metadata Document when the server advertises `client_id_metadata_document_supported` and the `none` auth method, else falls back to DCR. It needs a 401 with `resource_metadata`, a protected resource whose `resource` is the MCP URL as entered, PKCE S256, and a form-urlencoded token endpoint. Traffic comes from `160.79.104.0/21`, IPv4 only. Source: claude.com/docs/connectors/building/authentication. The docs don't name the Claude app's client ID; it is `https://claude.ai/oauth/mcp-oauth-client-metadata` (public, `none`), plus `.../confidential_client` (`private_key_jwt`, ES256, keys at `https://claude.ai/v1/mcp/jwks`) for servers that list `private_key_jwt`, as this one does. Both reach the consent page on the deployed broker, and the public one works end to end (M2, M3). |
-| Can Duet add a connector itself? | Not verified. Connectors are added in the Claude app's settings; whether Duet sees claude.ai connectors needs Jack's check in step 7 above. |
+| Can Duet add a connector itself? | Not by itself: connectors are added in claude.ai settings (Customize > Connectors). A connector added there was available in Claude Duet (2026-11-12): Duet ran acceptance tests 2 to 4 through it ([findings](docs/findings.md), section 0). |
 | Does the 1Password JS SDK run in Workers? | Not as published (its WASM core is read with `fs.readFileSync` and compiled at runtime, which Workers forbid). **Yes with a build-time patch**: verified in workerd, where the core runs and reaches 1Password's sign-in endpoint. 4.1 MB gzipped, so Workers Paid. See [docs/1password.md](docs/1password.md) and [spikes/1password-workers](spikes/1password-workers). |
 | Can Grok Bot, Muse or Dots use remote MCP? | Not checked (out of the baseline). |
 
