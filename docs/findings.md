@@ -101,6 +101,7 @@ Last updated 2026-11-12.
 - **Tools** (live policy, agent `duet`):
   - `da_list` and `da_get` are read-only and behind approval on every call, by policy.
   - `da_put_draft` always needs approval, whatever the policy says. It saves a draft only: never preview or publish, which are separate `admin.hlx.page` calls. It sends `x-da-initiator: mcp`, so da.live's version history shows an agent wrote it.
+- **Scratch folder:** `jackzhaojin/www-eds/drafts/sites-ai-webinar`, named by Jack on 2026-11-12. It already holds a real page (his "Sites and AI" webinar deck), so a write there can replace real content; the approval on every call is what guards it.
 - **Path rules:** every path must sit inside the scratch folder Jack names (`DA_SCRATCH`). Segments are lowercase letters, digits and hyphens only, so `..`, hidden folders and `.da` config are impossible. Documents must end in `.html`.
 - **Untrusted content:** `da_get` returns the HTML marked `untrusted_content`.
 

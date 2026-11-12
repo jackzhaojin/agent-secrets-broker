@@ -16,8 +16,11 @@
     "PUBLIC_BASE_URL": "https://agent-secrets-broker-live.jackzhaojin.workers.dev",
     "ENVIRONMENT": "live",
     "SECRET_CACHE_TTL_SECONDS": "300",
-    // The only da.live folder the DA tools may touch ("org/site/folder"). Jack names it.
-    "DA_SCRATCH": ""
+    // The only da.live folder the DA tools may touch ("org/site/folder"). Jack named it on
+    // 2026-11-12 (https://main--www-eds--jackzhaojin.aem.page/drafts/sites-ai-webinar/). It holds
+    // his real "Sites and AI" webinar page, so da_put_draft can replace that page: every call
+    // needs his approval, and the approval page shows the path.
+    "DA_SCRATCH": "jackzhaojin/www-eds/drafts/sites-ai-webinar"
   },
   // Worker secrets, never committed:
   //   OWNER_PASSWORD                                        Jack, `wrangler secret put`

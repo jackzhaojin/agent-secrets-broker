@@ -31,7 +31,11 @@ npx wrangler secret put OWNER_PASSWORD -c wrangler.live.jsonc
 
 ## 3. Scratch folder
 
-Tell Claude the scratch folder for the agent: `org/site/folder` on da.live (for example `jackzhaojin/my-site/agent-scratch`). The tools can only list, read and write inside it. Check that your Adobe user can write there (the DA permissions sheet, if the org has one). Claude then sets it and redeploys.
+**Set (2026-11-12): `jackzhaojin/www-eds/drafts/sites-ai-webinar`**, from the preview URL Jack gave (`https://main--www-eds--jackzhaojin.aem.page/drafts/sites-ai-webinar/`). The tools can only list, read and write inside it.
+
+That folder is not empty: it holds the "Sites and AI" webinar page (`index.html`). `da_put_draft` can replace a document there, with your approval on each call; the approval page shows the path and the start of the new HTML, so check the path before approving. Nothing is previewed or published. To keep the agent away from real pages, name an empty folder instead (for example `jackzhaojin/www-eds/drafts/agent-scratch`) and Claude redeploys with it.
+
+Check that your Adobe user can write there (the DA permissions sheet, if the org has one).
 
 Check progress any time (names only, no values):
 
@@ -41,7 +45,7 @@ npm run live -- status
 
 ## 4. Consent on Adobe's page
 
-Once Claude has deployed with the scratch folder: open `https://agent-secrets-broker-live.jackzhaojin.workers.dev/connect/adobe`, sign in with the owner password, and consent on Adobe's page. The admin page then shows who is connected and when the tokens expire.
+Open `https://agent-secrets-broker-live.jackzhaojin.workers.dev/connect/adobe`, sign in with the owner password, and consent on Adobe's page. The admin page then shows who is connected and when the tokens expire.
 
 ## 5. Connect Claude to the live broker
 
