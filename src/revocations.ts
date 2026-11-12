@@ -38,11 +38,36 @@ export class RevocationList extends DurableObject<Env> {
     return clientAt !== undefined && (!Number.isFinite(q.approvedAtMs) || q.approvedAtMs <= clientAt);
   }
 
+  /**
+   * The broker's own record of which grant each client holds, written at consent. Revoking a
+   * client and replacing a connection then don't depend on the library's KV listing, which can
+   * miss a grant made in the last minute. Returns the client's earlier grants: the broker keeps
+   * one connection per app, so a new consent replaces them.
+   */
+  async trackGrant(clientId: string, grantId: string): Promise<string[]> {
+    const key = `i:${clientId}`;
+    const known = (await this.ctx.storage.get<string[]>(key)) ?? [];
+    await this.ctx.storage.put(key, [grantId]);
+    return known.filter((id) => id !== grantId);
+  }
+
+  async grantsOf(clientId: string): Promise<string[]> {
+    return (await this.ctx.storage.get<string[]>(`i:${clientId}`)) ?? [];
+  }
+
+  /** Drop one grant from a client's record, or the whole record. */
+  async forget(clientId: string, grantId?: string): Promise<void> {
+    const key = `i:${clientId}`;
+    const left = grantId ? ((await this.ctx.storage.get<string[]>(key)) ?? []).filter((id) => id !== grantId) : [];
+    if (left.length) await this.ctx.storage.put(key, left);
+    else await this.ctx.storage.delete(key);
+  }
+
   async prune(): Promise<number> {
     const cutoff = Date.now() - KEEP_MS;
     let n = 0;
-    for (const [key, at] of await this.ctx.storage.list<number>()) {
-      if (at < cutoff) {
+    for (const [key, at] of await this.ctx.storage.list<unknown>()) {
+      if (typeof at === 'number' && at < cutoff) {
         await this.ctx.storage.delete(key);
         n++;
       }

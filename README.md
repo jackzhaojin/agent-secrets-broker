@@ -6,18 +6,27 @@ The test it is built to pass: *Claude Duet asks the broker to do something that 
 
 **Status: proof of concept.** Two deployments:
 
-- **The sandbox** holds dummy test secrets (`TEST_SECRET_A` to `G` style values) and calls a mock upstream it hosts itself. It carries the mechanism tests: 40 of 40 pass against the deployed URL ([docs/test-log.md](docs/test-log.md)).
+- **The sandbox** holds dummy test secrets (`TEST_SECRET_A` to `G` style values) and calls a mock upstream it hosts itself. It carries the mechanism tests, all passing against the deployed URL, and Claude Duet's own run through a claude.ai connector on 2026-11-12: six of six ([docs/test-log.md](docs/test-log.md)).
 - **The live broker** holds real credentials in 1Password and is waiting on Jack's account setup ([docs/live-setup.md](docs/live-setup.md)).
 
 Phase 2 results, negatives included, are in [docs/findings.md](docs/findings.md).
 
 ## What the broker can and can't do
 
+Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md)):
+
+| | Experiment | Result |
+|---|---|---|
+| A | da.live as Jack (Adobe sign-in held by the broker) | **Built, not yet run on the real account.** Deployed on the live broker; waiting on Jack's 1Password, Adobe credential and consent |
+| B | Best Buy orders with Jack's username and password | **Blocked** by Best Buy's terms for AI agents. No attempt made |
+| C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet: pending, Jack approved, ran once |
+| D | Negative tests: prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs | **Works with caveats.** The broker contains a fooled agent but can't prevent one; a stolen refresh token works until revoke; "duet" is any Claude on Jack's account |
+
 **It can:**
 
 - **Call APIs with keys agents never see.** No tool returns a secret, token or credential, error messages included. A redactor scrubs every secret it has handled from anything it sends out.
 - **Give each agent its own tools.** The owner picks the agent when approving a connection. Each agent gets only its policy's tools, and other calls are refused and audited (Duet vs AnimaMesh, tested).
-- **Hold a call until the owner approves it.** Sensitive tools return "pending" until Jack approves that exact call on the admin page, and it then runs once. Only the owner's password session can approve, never an agent's token or the admin token.
+- **Hold a call until the owner approves it.** Sensitive tools return "pending" until Jack approves that exact call on the admin page, and it then runs once. Only the owner's password session can approve, never an agent's token or the admin token. Claude Duet did this end to end on the sandbox.
 - **Contain a fooled agent.** Text from upstreams arrives marked untrusted. A call that tries to send out a credential (its own access token, a key) is refused, and writes wait for approval. A key embedded in upstream content is redacted.
 - **Cut a connection off at once.** Revoke takes effect on the next call and the next refresh, including tokens minted seconds earlier; that needed a fix, see findings D3.
 - **Rotate keys without a redeploy, and keep an audit trail.** The audit log records who called what and how it went, with no arguments, contents or tokens.
@@ -31,6 +40,8 @@ Phase 2 results, negatives included, are in [docs/findings.md](docs/findings.md)
 - **Solve CAPTCHAs, get past bot checks, or answer MFA prompts.** It doesn't, by design.
 - **Notify the owner of a pending approval.** Jack has to open the admin page; email or push needs an account.
 - **Limit an upstream token to less than the user's own rights.** Jack's Adobe token can write wherever he can; only the broker enforces the scratch folder.
+- **Tell one Claude from another.** A connector added in claude.ai belongs to Jack's account, so every Claude on it that loads connectors (Duet, a normal chat, Claude Code) reaches the broker as the same agent. Confirmed 2026-11-12: a Claude Code session showed up as `duet`. Narrow tool lists, approval on writes and revoking when idle limit this; binding to one agent needs that agent to prove its identity (findings, section 0).
+- **Hold two connections from one app.** A new consent from the same app (same client ID) replaces the earlier connection; the consent page warns before it does.
 - **Tell people apart.** There is one owner. The OAuth client ID identifies the app (every Claude user presents the same published ID), not the person, and every connection is approved with the one owner password. Separate users with their own permissions, accounts and approvals would need per-person sign-in on the consent page (for example Google sign-in for an allow-list of emails). Not built.
 
 | | Sandbox | Live |

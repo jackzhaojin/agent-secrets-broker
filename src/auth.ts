@@ -59,8 +59,13 @@ export async function hasAdminSession(env: Env, request: Request): Promise<boole
   return safeEqual(sig, await hmac(env, exp));
 }
 
-/** Form posts on admin pages must come from this origin (on top of SameSite=Strict). */
+/**
+ * Form posts on admin pages must come from this origin (on top of SameSite=Strict). Browsers send
+ * "Origin: null" on a form post from a page whose referrer policy is no-referrer, so a null or
+ * missing Origin falls back to Sec-Fetch-Site, which pages can't set.
+ */
 export function sameOrigin(env: Env, request: Request): boolean {
   const origin = request.headers.get('origin');
-  return !!origin && origin === new URL(env.PUBLIC_BASE_URL).origin;
+  if (origin && origin !== 'null') return origin === new URL(env.PUBLIC_BASE_URL).origin;
+  return request.headers.get('sec-fetch-site') === 'same-origin';
 }

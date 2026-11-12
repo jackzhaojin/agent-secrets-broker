@@ -69,11 +69,13 @@ async function tfetch(url, init = {}) {
 
 function record(id, name, status, detail, extra = {}) {
   results.push({ id, name, status, detail, ...extra });
-  const mark = status === 'PASS' ? 'PASS' : status === 'FAIL' ? 'FAIL' : 'INFO';
+  const mark = ['PASS', 'FAIL', 'SKIP'].includes(status) ? status : 'INFO';
   console.log(`${mark.padEnd(4)}  ${id.padEnd(4)} ${name}${detail ? ` - ${detail}` : ''}`);
 }
 
 class CheckFailed extends Error {}
+/** A check that stopped on purpose before a step that would disturb something real. */
+class Skipped extends Error {}
 const expect = (cond, message) => {
   if (!cond) throw new CheckFailed(message);
 };
@@ -86,6 +88,10 @@ async function check(id, name, fn) {
     record(id, name, 'PASS', detail ?? '', { ms: Date.now() - t0 });
     return true;
   } catch (err) {
+    if (err instanceof Skipped) {
+      record(id, name, 'SKIP', err.message, { ms: Date.now() - t0 });
+      return true;
+    }
     record(id, name, 'FAIL', err instanceof CheckFailed ? err.message : `${err?.name ?? 'Error'}: ${err?.message ?? err}`, { ms: Date.now() - t0 });
     return false;
   }
@@ -257,6 +263,21 @@ async function admin(method, path, body) {
  * before/after diff of the grant listing missed grants because KV listings lag (two stray test
  * grants were left on 2026-11-08).
  */
+/**
+ * The broker keeps one connection per app per owner: a new consent from a client ID revokes that
+ * client's earlier grants (it replaced Jack's own Claude connection on 2026-11-12). So a CIMD check
+ * stops after the consent page when the client already has a connection, unless the run is told to
+ * replace it with --replace-connections.
+ */
+async function stopIfConnected(clientId, consent, checked) {
+  if (argv.includes('--replace-connections')) return;
+  const conns = await admin('GET', 'clients');
+  const live = conns.body.connections?.find((c) => c.client_id === clientId)?.grants ?? [];
+  if (!live.length) return;
+  expect(consent.html.includes("replaces this app's existing connection"), 'the consent page does not warn that approving replaces the existing connection');
+  throw new Skipped(`${checked}; the page warns that approving replaces the existing connection (agent ${live[0].agent}, since ${live[0].created_at}). Not approved, so that connection stays. Rerun with --replace-connections to test end to end`);
+}
+
 function cleanupGrantOf(clientId, redirectLocation) {
   const grantId = new URL(redirectLocation).searchParams.get('code')?.split(':')[1];
   expect(grantId, 'no grant id in the authorization code');
@@ -523,13 +544,20 @@ async function main() {
     return `applied in ${Math.round(w.waitedMs / 1000)}s; not listed; call refused ("${call.text.slice(0, 60)}"); audited denied/not_in_policy; restored`;
   });
   await check('R1', 'Refresh token rotates and the new access token works', async () => {
-    const r = await token({ grant_type: 'refresh_token', refresh_token: duet.tokens.refresh_token, client_id: duet.clientId, resource: MCP });
-    expect(r.status === 200, `HTTP ${r.status} ${r.body.error ?? ''}`);
+    // A refresh soon after connecting can land in another Cloudflare location that still holds the
+    // grant as it was before the code exchange, and the library then answers invalid_grant
+    // (seen 2026-11-12: exchange in YYZ, refresh 10 s later in ORD). A refused refresh doesn't use
+    // the token up, so wait it out and report how long it took.
+    const w = await until('refresh accepted', async () => {
+      const x = await token({ grant_type: 'refresh_token', refresh_token: duet.tokens.refresh_token, client_id: duet.clientId, resource: MCP });
+      return { done: x.status === 200, state: `HTTP ${x.status} ${x.body.error ?? ''}`, r: x };
+    }, { timeoutMs: 90_000, intervalMs: 5000 });
+    const r = w.r;
     expect(r.body.access_token !== duet.tokens.access_token && r.body.refresh_token !== duet.tokens.refresh_token, 'tokens did not rotate');
     duet.tokens = r.body;
     const who = await callTool(duet.tokens.access_token, 'whoami');
     expect(!who.isError && who.data.agent === 'duet', 'whoami with refreshed token failed');
-    return 'new access and refresh tokens; whoami OK';
+    return `new access and refresh tokens${w.waitedMs > 1000 ? ` (accepted after ${Math.round(w.waitedMs / 1000)}s: an earlier try hit a location with a stale grant)` : ''}; whoami OK`;
   });
   await check('T6', 'Revoke: next call 401, refresh refused, reconnecting needs consent again', async () => {
     const rv = await admin('POST', 'revoke', { client_id: duet.clientId });
@@ -715,6 +743,7 @@ async function main() {
     expect(consent.status === 200, `consent HTTP ${consent.status}: ${consent.html.slice(0, 200)}`);
     expect(consent.html.includes('Published by <strong>claude.ai</strong>'), 'CIMD domain not shown');
     expect(consent.html.includes('localhost'), 'loopback warning missing');
+    await stopIfConnected(CLAUDE_CODE_CIMD, consent, 'consent page shows "Published by claude.ai" and the localhost warning');
     const done = await submitConsent(consent, { agent: 'inspector', password: OWNER_PASSWORD });
     expect(done.status === 302, `approve HTTP ${done.status}`);
     cleanupGrantOf(CLAUDE_CODE_CIMD, done.location);
@@ -734,8 +763,9 @@ async function main() {
     expect(consent.status === 200, `consent HTTP ${consent.status}: ${consent.html.slice(0, 200)}`);
     expect(consent.html.includes('Published by <strong>claude.ai</strong>'), 'CIMD domain not shown');
     expect(consent.html.includes('Access goes to <strong>claude.ai</strong>'), 'redirect host not shown');
-    expect(!consent.html.includes('class="warn"'), 'unexpected loopback warning');
+    expect(!consent.html.includes('on a computer (localhost)'), 'unexpected loopback warning');
     expect(consent.html.includes('value="duet" required checked'), 'duet not preselected');
+    await stopIfConnected(CLAUDE_AI_CIMD, consent, 'consent page shows "Published by claude.ai", access to claude.ai, duet preselected');
     const done = await submitConsent(consent, { agent: 'duet', password: OWNER_PASSWORD });
     expect(done.status === 302 && done.location, `approve HTTP ${done.status}`);
     cleanupGrantOf(CLAUDE_AI_CIMD, done.location);
@@ -750,7 +780,12 @@ async function main() {
     expect(who.data?.agent === 'duet' && who.data?.client?.name === 'Claude', `whoami ${who.text.slice(0, 100)}`);
     const repos = await callTool(ref.body.access_token, 'mockgit_list_my_repos', { limit: 2 });
     expect(!repos.isError && repos.data?.count === 2, `repo list ${repos.text.slice(0, 100)}`);
-    return 'consent "Published by claude.ai", access to claude.ai, duet preselected; public-client token (900s), refresh rotated; whoami client "Claude", agent duet; repo list OK';
+    // A second consent from the same app would replace this connection: the page must say so.
+    await until('replace warning on a second consent', async () => {
+      const again = await openConsent(authorizeUrl({ clientId: CLAUDE_AI_CIMD, redirectUri: CLAUDE_CALLBACK, challenge, state: st }));
+      return { done: again.html.includes("replaces this app's existing connection") && again.html.includes('agent duet'), state: 'no warning yet' };
+    }, { timeoutMs: 90_000, intervalMs: 3000 });
+    return 'consent "Published by claude.ai", access to claude.ai, duet preselected; public-client token (900s), refresh rotated; whoami client "Claude", agent duet; repo list OK; a second consent page warns that approving replaces this connection';
   });
   await check('M3', "CIMD: claude.ai's confidential client ID gets consent, and its code needs Claude's signed assertion", async () => {
     const { verifier, challenge } = pkce();
@@ -758,6 +793,7 @@ async function main() {
     expect(consent.status === 200, `consent HTTP ${consent.status}: ${consent.html.slice(0, 200)}`);
     expect(consent.html.includes('Published by <strong>claude.ai</strong>'), 'CIMD domain not shown');
     expect(consent.html.includes('value="duet" required checked'), 'duet not preselected');
+    await stopIfConnected(CLAUDE_AI_CIMD_CONFIDENTIAL, consent, 'consent page shows "Published by claude.ai", duet preselected');
     const done = await submitConsent(consent, { agent: 'duet', password: OWNER_PASSWORD });
     expect(done.status === 302 && done.location, `approve HTTP ${done.status}`);
     cleanupGrantOf(CLAUDE_AI_CIMD_CONFIDENTIAL, done.location);
@@ -812,14 +848,22 @@ async function main() {
 
   // ---- Admin page (what Jack uses from a phone to revoke) --------------------------------------
   await check('A1', 'Admin page: sign-in needs the owner password and this origin; it lists connections', async () => {
-    const post = (password, origin) =>
+    const post = (password, origin, fetchSite) =>
       tfetch(`${BASE}/admin/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded', ...(origin ? { origin } : {}) },
+        headers: { 'content-type': 'application/x-www-form-urlencoded', ...(origin ? { origin } : {}), ...(fetchSite ? { 'sec-fetch-site': fetchSite } : {}) },
         body: new URLSearchParams({ username: 'owner', password }),
         redirect: 'manual',
       });
     expect((await post(OWNER_PASSWORD, null)).status === 403, 'sign-in without Origin was not refused');
+    // What a real browser sends from a page with a strict referrer policy: "Origin: null" plus
+    // Sec-Fetch-Site. Same-origin must work (it returned Forbidden to Jack on 2026-11-12); cross-site must not.
+    expect((await post(OWNER_PASSWORD, 'null', 'cross-site')).status === 403, 'cross-site sign-in with a null Origin was not refused');
+    expect((await post(OWNER_PASSWORD, 'https://evil.example', 'same-origin')).status === 403, 'sign-in from another Origin was not refused');
+    const browser = await post(OWNER_PASSWORD, 'null', 'same-origin');
+    expect(browser.status === 303, `browser-shaped sign-in (Origin: null, Sec-Fetch-Site: same-origin): HTTP ${browser.status}`);
+    const adminHeaders = (await tfetch(`${BASE}/admin`)).headers;
+    expect(adminHeaders.get('referrer-policy') === 'same-origin', `admin referrer-policy ${adminHeaders.get('referrer-policy')}`);
     expect((await post('not-the-password', BASE)).status === 401, 'wrong password was not refused');
     const ok = await post(OWNER_PASSWORD, BASE);
     const cookie = ok.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
@@ -828,7 +872,7 @@ async function main() {
     expect(page.includes('<h2>Connections</h2>') && page.includes(duet.clientId) && page.includes('>Revoke</button>'), 'connections table missing');
     const anon = await (await tfetch(`${BASE}/admin`)).text();
     expect(!anon.includes('<h2>Connections</h2>'), 'admin page shown without a session');
-    return 'no Origin 403, wrong password 401, signed in (303, __Host- cookie); duet connection listed with Revoke';
+    return 'no Origin 403, cross-site 403, another Origin 403, wrong password 401; signed in with this Origin and the way a browser does it (Origin: null + Sec-Fetch-Site: same-origin), 303 with a __Host- cookie; duet connection listed with Revoke';
   });
 
   // ---- Cleanup ---------------------------------------------------------------------------------
@@ -896,6 +940,7 @@ async function main() {
 function writeReport() {
   const pass = results.filter((r) => r.status === 'PASS').length;
   const fail = results.filter((r) => r.status === 'FAIL').length;
+  const skip = results.filter((r) => r.status === 'SKIP').length;
   const json = { target: TARGET, base: BASE, started: STARTED.toISOString(), finished: new Date().toISOString(), version: state.versionBefore, pass, fail, results };
   writeFileSync(join(OUT_DIR, `e2e-${TARGET}-${STAMP}.json`), JSON.stringify(json, null, 2));
   writeFileSync(join(OUT_DIR, `transcript-${TARGET}-${STAMP}.json`), JSON.stringify(transcript, null, 2));
@@ -918,7 +963,7 @@ Generated by \`node test/e2e.mjs --target ${TARGET}\`. Do not edit by hand; reru
 | MCP URL | ${MCP} |
 | Started | ${STARTED.toISOString()} |
 | Worker version | \`${state.versionBefore ?? 'unknown'}\` |
-| Result | **${pass} passed, ${fail} failed** |
+| Result | **${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}** |
 
 ## Results
 
@@ -926,7 +971,7 @@ Generated by \`node test/e2e.mjs --target ${TARGET}\`. Do not edit by hand; reru
 |---|---|---|---|---|
 ${results.map((r) => `| ${r.id} | ${spec[r.id] ?? ''} | ${esc(r.name)} | ${r.status} | ${esc(r.detail)} |`).join('\n')}
 
-Acceptance test 1 (adding the connector in the Claude app) needs Jack in the app. C1 to C7 do the same protocol steps with the same callback URL (\`${CLAUDE_CALLBACK}\`) through Dynamic Client Registration, and M2 does them with the Claude app's own published client ID (\`${CLAUDE_AI_CIMD}\`). M3 covers its confidential variant up to the signed assertion, which only Claude can produce.
+Acceptance test 1 (adding the connector in the Claude app) is Jack's own step; his run and Claude Duet's calls are under "Claude Duet on the sandbox" below. Here, C1 to C7 do the same protocol steps with the same callback URL (\`${CLAUDE_CALLBACK}\`) through Dynamic Client Registration, and M2 does them with the Claude app's own published client ID (\`${CLAUDE_AI_CIMD}\`). M3 covers its confidential variant up to the signed assertion, which only Claude can produce. A new consent replaces an app's existing connection, so M1 to M3 stop after the consent page (SKIP) when that app is already connected.
 
 ## Dummy secrets searched for
 
@@ -938,7 +983,7 @@ ${Object.entries(ROLES).map(([l, role]) => `| ${l} | \`${fingerprint(values[l])}
 `;
   if (TARGET === 'remote') writeTestLog({ sandbox: md });
   writeFileSync(join(OUT_DIR, `test-log-${TARGET}.md`), md);
-  console.log(`\n${pass} passed, ${fail} failed. Report: ${TARGET === 'remote' ? 'docs/test-log.md' : `test-output/test-log-${TARGET}.md`}`);
+  console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}. Report: ${TARGET === 'remote' ? 'docs/test-log.md' : `test-output/test-log-${TARGET}.md`}`);
   return fail;
 }
 

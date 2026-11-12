@@ -20,7 +20,7 @@ const json = (status: number, body: unknown, headers?: HeadersInit) =>
 // Consent page
 // ---------------------------------------------------------------------------------------------
 
-function consentPage(d: ConsentDescription, handle: string, loaded: LoadedPolicy, returnTo: string): string {
+function consentPage(d: ConsentDescription, handle: string, loaded: LoadedPolicy, returnTo: string, existing: GrantSummary[]): string {
   const name = escape(d.clientName);
   const suggested = suggestAgent(loaded.policy, d.clientName);
   const origin = d.clientDomain
@@ -41,6 +41,7 @@ function consentPage(d: ConsentDescription, handle: string, loaded: LoadedPolicy
   <p>${origin}</p>
   <p>Access goes to <strong>${escape(d.redirectHost)}</strong>.</p>
   ${d.redirectIsLoopback ? '<p class="warn"><strong>This sends access to an app on a computer (localhost).</strong> Continue only if you just started connecting from it.</p>' : ''}
+  ${existing.length ? `<p class="warn"><strong>Approving replaces this app's existing connection</strong> (${existing.map((g) => `agent ${escape(((g.metadata ?? {}) as { agent?: string }).agent ?? '?')}, approved ${escape(new Date(g.createdAt * 1000).toISOString().slice(0, 16).replace('T', ' '))} UTC`).join('; ')}). The broker keeps one connection per app: the old one stops working at once.</p>` : ''}
   <p class="muted">Client ID: <code>${escape(d.clientId)}</code><br>Scopes: ${scopes.length ? scopes.map((s) => `<code>${escape(s)}</code>`).join(' ') : '<code>broker</code>'}</p>
 </div>
 <form method="post" action="/authorize">
@@ -83,6 +84,9 @@ async function getAuthorize(request: Request, env: Env): Promise<Response> {
     const details = await oauth.describeConsent(authRequest);
     const consent = await oauth.beginConsent(authRequest);
     const loaded = await loadPolicy(env);
+    // completeAuthorization revokes earlier grants of the same client (the library's default, one
+    // connection per app per owner), so say so before the owner approves.
+    const existing = (await allOwnerGrants(env)).filter((g) => g.clientId === authRequest.clientId);
     const url = new URL(request.url);
     const headers = consent.headers;
     headers.set('content-type', 'text/html; charset=utf-8');
@@ -92,7 +96,7 @@ async function getAuthorize(request: Request, env: Env): Promise<Response> {
     // redirect after the post, which goes to the client's callback on another origin.
     headers.set('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
     // The library's other consent headers (X-Frame-Options, the consent cookie) are kept as they are.
-    return new Response(page('Approve connection', consentPage(details, consent.handle, loaded, url.pathname + url.search)), {
+    return new Response(page('Approve connection', consentPage(details, consent.handle, loaded, url.pathname + url.search, existing)), {
       status: 200,
       headers,
     });
@@ -141,6 +145,17 @@ async function postAuthorize(request: Request, env: Env, ctx: ExecutionContext):
       scope: approved.request.scope,
       props,
     });
+    // One connection per app: the library revokes the client's earlier grants here, but it finds
+    // them with a KV listing that can miss a fresh one. The broker's own record closes that gap.
+    const newGrant = new URL(redirectTo).searchParams.get('code')?.split(':')[1];
+    if (newGrant) {
+      const replaced = await revocations(env).trackGrant(props.clientId, newGrant);
+      for (const id of replaced) {
+        await revocations(env).revokeGrant(id);
+        await oauth.revokeGrant(id, OWNER_USER_ID);
+      }
+      if (replaced.length) audit(env, ctx, { type: 'revoke', outcome: 'ok', client_id: props.clientId, client_name: clientName, code: `replaced_by_new_consent_${replaced.length}` });
+    }
     audit(env, ctx, { type: 'consent', outcome: 'ok', client_id: props.clientId, client_name: clientName, agent });
     approved.headers.set('Location', redirectTo);
     return new Response(null, { status: 302, headers: approved.headers });
@@ -225,14 +240,20 @@ async function revokeClient(env: Env, ctx: ExecutionContext, clientId: string, d
   const cutOffAt = grantId ? await revocations(env).revokeGrant(grantId) : await revocations(env).revokeClient(clientId);
   ctx.waitUntil(revocations(env).prune());
   const grants = (await allOwnerGrants(env)).filter((g) => g.clientId === clientId && (!grantId || g.id === grantId));
-  for (const g of grants) await env.OAUTH_PROVIDER.revokeGrant(g.id, OWNER_USER_ID);
+  // A named grant is deleted directly, listed or not: the KV listing lags, and a grant it missed
+  // would stay on the admin page although the revocation list already blocks it.
+  const ids = new Set(grants.map((g) => g.id));
+  if (grantId) ids.add(grantId);
+  else for (const id of await revocations(env).grantsOf(clientId)) ids.add(id);
+  for (const id of ids) await env.OAUTH_PROVIDER.revokeGrant(id, OWNER_USER_ID);
+  await revocations(env).forget(clientId, grantId);
   let deleted = false;
   if (deleteClient && !clientId.startsWith('https://')) {
     await env.OAUTH_PROVIDER.deleteClient(clientId);
     deleted = true;
   }
-  audit(env, ctx, { type: 'revoke', outcome: 'ok', client_id: clientId, code: `grants_${grants.length}${deleted ? '_client_deleted' : ''}` });
-  return { client_id: clientId, cut_off_at: new Date(cutOffAt).toISOString(), revoked_grants: grants.length, client_deleted: deleted };
+  audit(env, ctx, { type: 'revoke', outcome: 'ok', client_id: clientId, code: `grants_${ids.size}${deleted ? '_client_deleted' : ''}` });
+  return { client_id: clientId, cut_off_at: new Date(cutOffAt).toISOString(), revoked_grants: ids.size, client_deleted: deleted };
 }
 
 async function adminApi(request: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {

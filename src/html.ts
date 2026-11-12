@@ -6,7 +6,7 @@ const STYLE = `
 @media (prefers-color-scheme:dark){:root{--bg:#121212;--fg:#e8eaed;--muted:#9aa0a6;--line:#3c4043;--card:#1e1f20;--accent:#8ab4f8;--warn-bg:#3a2a12;--warn-fg:#ffcc80;--bad:#f28b82}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:760px;margin:0 auto;padding:24px 16px 48px}h1{font-size:1.5rem;margin:0 0 8px}h2{font-size:1.1rem;margin:28px 0 8px}
-p{margin:8px 0}.muted{color:var(--muted)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:12px 0}
+p{margin:8px 0}a{color:var(--accent)}.muted{color:var(--muted)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:12px 0}
 .warn{background:var(--warn-bg);color:var(--warn-fg);border-radius:8px;padding:10px 12px}.bad{color:var(--bad)}
 code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}pre{white-space:pre-wrap;word-break:break-word;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
 label.agent{display:block;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;cursor:pointer}
@@ -29,7 +29,9 @@ export function htmlHeaders(extra?: HeadersInit): Headers {
   h.set('cache-control', 'no-store');
   h.set('x-frame-options', 'DENY');
   h.set('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'");
-  h.set('referrer-policy', 'no-referrer');
+  // same-origin, not no-referrer: with no-referrer, browsers send "Origin: null" on our own form
+  // posts, which the admin origin check refuses. Other sites still get no referrer.
+  h.set('referrer-policy', 'same-origin');
   return h;
 }
 
