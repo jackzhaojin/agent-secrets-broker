@@ -15,6 +15,7 @@ useDeployment({
   tools: { ...CORE_TOOLS, ...MOCKGIT_TOOLS },
   policy: sandboxPolicy,
   secretStore: (env) => new KvVault(env.VAULT),
+  secretStoreName: 'kv-vault',
 });
 
 export { ApprovalStore } from './approvals';

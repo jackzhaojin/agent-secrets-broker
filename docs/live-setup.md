@@ -1,23 +1,18 @@
 # Live broker: setup Jack does himself
 
-The live broker (`agent-secrets-broker-live`) holds real credentials, so every password, token and consent below is entered by Jack, in 1Password or on the provider's own page. Claude never types, prints or stores one. The sandbox keeps dummy secrets only.
+The live broker (`agent-secrets-broker-live`) holds real credentials, so every password, key and consent below is entered by Jack, at a `wrangler secret put` prompt or on the provider's own page. Claude never types, prints or stores one. The sandbox keeps dummy secrets only.
 
 Live URL: `https://agent-secrets-broker-live.jackzhaojin.workers.dev` (MCP at `/mcp`, admin at `/admin`).
 
-## 1. 1Password (vault and read-only service account)
+**Secrets are Cloudflare Worker secrets for now, not 1Password** (Jack's call, 2026-11-12, to get the Adobe experiment running). There's no vault and no service account to set up. The 1Password variant is still in the repo; see the end of this page.
 
-1. In 1Password, create a vault named **Broker**.
-2. Create a **service account** (1Password.com > Developer > Service Accounts) with **read** access to **Broker** only, no other vaults, and an **expiry** (90 days suggested). Copy its token when 1Password shows it (it's shown once).
-3. In a terminal in this repo, store the token as a Worker secret. Paste it at the prompt; it isn't echoed or saved anywhere else:
-   ```bash
-   npx wrangler secret put OP_SERVICE_ACCOUNT_TOKEN -c wrangler.live.jsonc
-   ```
-4. Choose the live broker's **owner password** (it approves connections and tool calls; keep it in your own 1Password vault, not Broker) and set it the same way:
-   ```bash
-   npx wrangler secret put OWNER_PASSWORD -c wrangler.live.jsonc
-   ```
+## 1. Owner password
 
-The broker's internal keys (`ADMIN_TOKEN`, `COOKIE_SECRET`, `TOKEN_ENC_KEY`) are random values that `npm run live -- init-keys` pipes straight into `wrangler secret bulk` without printing them. It keeps only `ADMIN_TOKEN` in the gitignored `.secrets/live.json`, so the scripts can read the live audit log. The admin token can't approve tool calls or connections: those need the owner password.
+Choose the live broker's owner password (it approves connections and tool calls; keep it in your own password manager) and set it. Paste at the prompt; it isn't echoed or saved anywhere else:
+
+```bash
+npx wrangler secret put OWNER_PASSWORD -c wrangler.live.jsonc
+```
 
 ## 2. Adobe (da.live as Jack): OAuth Web App credential
 
@@ -26,21 +21,43 @@ The broker's internal keys (`ADMIN_TOKEN`, `COOKIE_SECRET`, `TOKEN_ENC_KEY`) are
 3. Credential type **OAuth Web App**:
    - Default redirect URI: `https://agent-secrets-broker-live.jackzhaojin.workers.dev/connect/adobe/callback`
    - Redirect URI pattern: `https://agent-secrets-broker-live\.jackzhaojin\.workers\.dev/connect/adobe/callback`
-4. In the 1Password vault **Broker**, create an item named **adobe-oauth** with two fields: `client_id` and `client_secret` (copy both from the credential page).
-5. Tell Claude the **scratch folder** for the agent: `org/site/folder` on da.live (for example `jackzhaojin/my-site/agent-scratch`). The tools can only list, read and write inside it. Check that your Adobe user can write there (the DA permissions sheet, if the org has one).
-6. Once Claude has deployed with that folder: open `https://agent-secrets-broker-live.jackzhaojin.workers.dev/connect/adobe`, sign in with the owner password, and consent on Adobe's page. The admin page then shows who is connected and when the tokens expire.
+4. Set the credential's client ID and client secret as Worker secrets, pasting each at its prompt:
+   ```bash
+   npx wrangler secret put ADOBE_OAUTH_CLIENT_ID -c wrangler.live.jsonc
+   ```
+   ```bash
+   npx wrangler secret put ADOBE_OAUTH_CLIENT_SECRET -c wrangler.live.jsonc
+   ```
 
-## 3. Connect Claude to the live broker
+## 3. Scratch folder
 
-claude.ai > Customize > Connectors > add a custom connector named `Agent Secrets Broker (live)` with URL `https://agent-secrets-broker-live.jackzhaojin.workers.dev/mcp`, approve as **duet** with the live owner password. Keep the sandbox connector too (acceptance test 1 on the sandbox is still open).
+Tell Claude the scratch folder for the agent: `org/site/folder` on da.live (for example `jackzhaojin/my-site/agent-scratch`). The tools can only list, read and write inside it. Check that your Adobe user can write there (the DA permissions sheet, if the org has one). Claude then sets it and redeploys.
 
-## 4. Best Buy: not set up (blocked by terms)
+Check progress any time (names only, no values):
 
-Best Buy's terms (updated 2026-09-25) allow AI agents only through Best Buy's "expressly authorized or published methods", and none is published. They also ban robots and intelligent agents and sharing account credentials, and sign-in sits behind Akamai bot management. See docs/findings.md, B. Don't put the Best Buy login in 1Password unless you decide to override that finding.
+```bash
+npm run live -- status
+```
 
-## Decisions for Jack
+## 4. Consent on Adobe's page
 
-- **da_list and da_get behind approval too?** Default: yes, all three DA tools need your approval on each call (the literal reading of the brief). `da_put_draft` always does, whatever the policy says.
-- **da_put_draft writes a draft into the scratch folder** (never preview or publish). It is the one write in an otherwise read-only phase. OK?
-- **Approval notifications:** the admin page only for now. Email needs Email Routing on one of your zones, and push needs a service account (ntfy, Pushover). Want either?
-- **Best Buy:** recorded as blocked by terms, no attempt made. Override only if you accept the account risk.
+Once Claude has deployed with the scratch folder: open `https://agent-secrets-broker-live.jackzhaojin.workers.dev/connect/adobe`, sign in with the owner password, and consent on Adobe's page. The admin page then shows who is connected and when the tokens expire.
+
+## 5. Connect Claude to the live broker
+
+claude.ai > Customize > Connectors > add a custom connector named `Agent Secrets Broker (live)` with URL `https://agent-secrets-broker-live.jackzhaojin.workers.dev/mcp`, and approve as **duet** with the live owner password. The connector belongs to your Claude account, so every Claude on it that loads connectors can use it.
+
+## Best Buy: not set up (blocked by terms)
+
+Best Buy's terms (updated 2026-09-25) allow AI agents only through Best Buy's "expressly authorized or published methods", and none is published. See docs/findings.md, B.
+
+## Decisions (defaults in force unless Jack says otherwise)
+
+- **da_list and da_get behind approval too:** yes, all three DA tools need approval on each call. `da_put_draft` always does, whatever the policy says.
+- **da_put_draft writes a draft into the scratch folder** (never preview or publish). It is the one write in an otherwise read-only phase.
+- **Approval notifications:** the admin page only.
+- **Best Buy:** recorded as blocked by terms, no attempt made.
+
+## Going back to 1Password later
+
+The 1Password store and its entry point (`src/live-1password.ts`) are kept. To switch: create the vault **Broker** with an item **adobe-oauth** (fields `client_id`, `client_secret`) and a read-only service account with an expiry, set `OP_SERVICE_ACCOUNT_TOKEN` with `wrangler secret put`, and deploy with `npm run deploy:live:1password`. Whether the 1Password SDK works on Workers with a real service account is still untested ([1password.md](1password.md)).

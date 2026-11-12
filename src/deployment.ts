@@ -4,8 +4,8 @@ import type { ToolDef } from './tools/types';
 
 /**
  * What differs between the sandbox Worker (dummy secrets, Mock Git) and the live Worker (real
- * accounts, 1Password). Each entry point registers one at module load; the shared code reads it.
- * The live bundle never contains the mock tools, and the sandbox bundle never contains 1Password.
+ * accounts). Each entry point registers one at module load; the shared code reads it. The live
+ * bundle never contains the mock tools, and only the 1Password entry point contains its SDK.
  */
 export interface Deployment {
   name: 'sandbox' | 'live';
@@ -14,6 +14,10 @@ export interface Deployment {
   policy: unknown;
   /** Where this deployment's secrets live. */
   secretStore(env: Env): SecretStore;
+  /** Short name of the secret store, for status output: "kv-vault", "worker-secrets", "1password". */
+  secretStoreName?: string;
+  /** What the owner should check when a secret can't be read (shown on owner-only pages). */
+  secretStoreHint?: string;
   /** Extra routes (for example /connect/adobe), tried before the app's own. */
   routes?(request: Request, env: Env, ctx: ExecutionContext): Promise<Response | null>;
   /** Extra sections on the admin page (HTML), for example upstream connection status. */

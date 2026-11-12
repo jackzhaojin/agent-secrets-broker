@@ -101,8 +101,8 @@ async function main() {
     const a = s.adobe ?? {};
     return [
       `owner password ${s.owner_password_set ? 'set' : 'NOT set'}`,
-      `1Password token ${s.onepassword?.service_account_token_set ? 'set' : 'NOT set'}`,
-      `adobe-oauth item ${s.onepassword?.adobe_client_readable ? 'readable' : 'not readable'}`,
+      `secret store ${s.secret_store}`,
+      `Adobe client ID and secret ${s.adobe_client_readable ? 'readable' : 'NOT set'}`,
       `scratch ${s.da_scratch ?? 'NOT set'}`,
       a.connected ? `Adobe connected as ${a.account} (scope ${a.scope}; access until ${a.access_expires_at}; refresh token ${a.has_refresh_token ? 'yes' : 'no'}; refreshed ${a.refresh_count}x, refresh token replaced ${a.refresh_token_changes}x)` : 'Adobe not connected',
     ].join('; ');

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Live broker helpers. Real secrets are entered by Jack (1Password, `wrangler secret put`); this
+// Live broker helpers. Real secrets are entered by Jack (`wrangler secret put`); this
 // script only handles the broker's own random keys and never prints a secret value.
 //
 //   npm run live -- init-keys     generate ADMIN_TOKEN, COOKIE_SECRET, TOKEN_ENC_KEY and push them to
@@ -41,7 +41,7 @@ switch (cmd) {
   case 'status': {
     const out = wrangler(['secret', 'list', '-c', CONFIG, '--format', 'json']);
     const names = JSON.parse(out).map((s) => s.name).sort();
-    for (const n of ['OP_SERVICE_ACCOUNT_TOKEN', 'OWNER_PASSWORD', 'ADMIN_TOKEN', 'COOKIE_SECRET', 'TOKEN_ENC_KEY']) {
+    for (const n of ['OWNER_PASSWORD', 'ADOBE_OAUTH_CLIENT_ID', 'ADOBE_OAUTH_CLIENT_SECRET', 'ADMIN_TOKEN', 'COOKIE_SECRET', 'TOKEN_ENC_KEY']) {
       console.log(`  ${names.includes(n) ? 'set    ' : 'MISSING'}  ${n}`);
     }
     const h = await fetch(`${LIVE_BASE}/healthz`).then((r) => r.json()).catch((e) => ({ error: String(e) }));

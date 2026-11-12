@@ -16,10 +16,11 @@
     "admin": "node scripts/admin.mjs",
     "test:e2e": "node test/e2e.mjs",
     "scan": "node scripts/secret-scan.mjs",
-    "deploy:live": "node scripts/patch-1password.mjs && wrangler deploy -c wrangler.live.jsonc",
+    "deploy:live": "wrangler deploy -c wrangler.live.jsonc",
     "live": "node scripts/live.mjs",
     "test:live": "node test/live.mjs",
-    "test:duet": "node test/duet.mjs"
+    "test:duet": "node test/duet.mjs",
+    "deploy:live:1password": "node scripts/patch-1password.mjs && wrangler deploy src/live-1password.ts -c wrangler.live.jsonc --alias @1password/sdk-core:./patched/sdk-core.mjs"
   },
   "dependencies": {
     "@1password/sdk": "0.5.0",

@@ -22,7 +22,10 @@ export interface Env {
   COOKIE_SECRET: string;
 
   // Live deployment only (wrangler.live.jsonc)
-  /** 1Password service account token, read access to one vault. Set by Jack with `wrangler secret put`. */
+  /** Adobe OAuth Web App credential, Worker secrets set by Jack (src/secrets/worker-secrets.ts). */
+  ADOBE_OAUTH_CLIENT_ID?: string;
+  ADOBE_OAUTH_CLIENT_SECRET?: string;
+  /** Only with the 1Password entry point (src/live-1password.ts): service account token, read access to one vault. */
   OP_SERVICE_ACCOUNT_TOKEN?: string;
   /** The 1Password vault the broker reads (default "Broker"). */
   OP_VAULT?: string;

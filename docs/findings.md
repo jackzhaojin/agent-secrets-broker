@@ -7,7 +7,7 @@ Phase 2 pushes the broker against real accounts and records the negatives as car
 - **Blocked**: can't be done, or shouldn't be, and why.
 - **Pending**: built, but waiting on a step only Jack can take (an account, a password, a consent).
 
-The sandbox (`agent-secrets-broker-sandbox`, dummy secrets) carries the mechanism tests. The live broker (`agent-secrets-broker-live`, 1Password, real accounts) carries the real-account ones. Test evidence is in [test-log.md](test-log.md): the sandbox run is IDs P1 to L3, Claude Duet's own calls on the sandbox are under "Claude Duet on the sandbox" (DS1 to DS6), and the live checks under "Live broker" (LV1 to LV8).
+The sandbox (`agent-secrets-broker-sandbox`, dummy secrets) carries the mechanism tests. The live broker (`agent-secrets-broker-live`, real accounts) carries the real-account ones. Test evidence is in [test-log.md](test-log.md): the sandbox run is IDs P1 to L3, Claude Duet's own calls on the sandbox are under "Claude Duet on the sandbox" (DS1 to DS6), and the live checks under "Live broker" (LV1 to LV8).
 
 Last updated 2026-11-12.
 
@@ -16,7 +16,7 @@ Last updated 2026-11-12.
 | | Experiment | Verdict | Evidence |
 |---|---|---|---|
 | 0 | The Claude app connector and Claude Duet (acceptance tests 1 to 4) | **Works** (2026-11-12). Caveat: "duet" means any Claude on Jack's account, not Duet alone | DS1 to DS6 |
-| A | da.live as Jack (Adobe IMS, user-delegated OAuth) | **Pending** (built and deployed; waiting on Jack's 1Password, Adobe credential and consent) | Research below; live checks LV1 to LV7 |
+| A | da.live as Jack (Adobe IMS, user-delegated OAuth) | **Pending** (built and deployed; waiting on Jack's owner password, Adobe credential and consent) | Research below; live checks LV1 to LV7 |
 | B | Best Buy recent orders with Jack's username and password | **Blocked by terms of use** (no attempt made) | Best Buy Terms, "Digital Agents" section, updated 2026-09-25 |
 | C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet (pending, Jack approved, the repeat call ran once) | AP1 to AP6, DS6 |
 | D1 | Prompt injection via upstream content | **Works with caveats**: the broker contains it, it can't prevent it; Duet read a poisoned README and didn't act on it | N1, N2, DS5 |
@@ -72,7 +72,14 @@ Last updated 2026-11-12.
 
 ## A. Adobe da.live as Jack
 
-**Verdict: pending.** Everything up to Jack's consent is built and deployed on the live broker. The remaining steps are his: the 1Password service account, an Adobe Developer Console credential, the scratch folder name, and consent on Adobe's page. See [live-setup.md](live-setup.md).
+**Verdict: pending.** Everything up to Jack's consent is built and deployed on the live broker. The remaining steps are his: the owner password, an Adobe Developer Console credential (its client ID and secret set as Worker secrets), the scratch folder name, and consent on Adobe's page. See [live-setup.md](live-setup.md).
+
+**Secret store: Cloudflare Worker secrets, not 1Password, for now.** The Phase 2 brief put the live broker on 1Password. On 2026-11-12 Jack chose Worker secrets instead, to get the Adobe experiment running without first setting up a vault and a service account. This is a deliberate change to that rule.
+
+- **What it covers:** the only secrets the Adobe experiment reads from a store are the Adobe client ID and client secret. Jack sets both with `wrangler secret put`; nobody else sees them. The owner password and the broker's own keys were already Worker secrets, and the Adobe tokens stay encrypted in KV.
+- **What it costs:** there's no place for per-key notes (purpose, expiry, rotation), and a Worker secret can't be read back or audited the way a vault item can. For two values that makes no practical difference; for many keys a vault is the better home.
+- **What stays open:** whether the 1Password SDK works on Workers with a real service account. It's proven only up to the sign-in call with a fake token ([1password.md](1password.md)).
+- **Switching back** is a deploy of the other entry point (`npm run deploy:live:1password`), not a code change.
 
 ### How da.live calls authenticate
 
@@ -86,7 +93,7 @@ Last updated 2026-11-12.
 - **Credential:** an OAuth Web App credential, which is a confidential client. The secret is sent as HTTP Basic at `/ims/token/v3`.
 - **Consent:** the owner starts it at `/connect/adobe` (owner-password session). The flow uses PKCE and a `state` bound to the browser by a cookie. Jack consents on Adobe's page, and the callback exchanges the code.
 - **Where things live:**
-  - The client ID and secret are read from 1Password: `op://Broker/adobe-oauth/client_id` and `.../client_secret`.
+  - The client ID and secret are Worker secrets (`ADOBE_OAUTH_CLIENT_ID`, `ADOBE_OAUTH_CLIENT_SECRET`), read through the same `SecretStore` interface the 1Password store implements.
   - The tokens are kept AES-GCM-encrypted in KV under a Worker-secret key.
   - Every token value is added to the redactor's set, so it can't reach a tool result or tool arguments.
 - **Scopes requested:** `openid, AdobeID, read_organizations, offline_access, additional_info.projectedProductContext`.
@@ -212,5 +219,6 @@ Caveat: isolation is between **connections**, and Jack assigns each connection i
 - **workers.dev blocks Python's default user agent.** Cloudflare answers `Python-urllib` with error 1010 (403) before the Worker runs. Use another client or set a user agent in ad hoc probes.
 - **KV listings lag.** Besides revoke, the audit log (a KV listing) can take seconds to show a new line, so tests poll it.
 - **A refresh right after connecting can fail at another Cloudflare location.** Seen once (2026-11-12): the code exchange was served in Toronto (YYZ) and a refresh 10 seconds later in Chicago (ORD), which still held the grant as it was before the exchange, so the library answered `invalid_grant` ("Invalid refresh token"). The refused refresh doesn't use the token up, and a later try works. Claude refreshes after about 15 minutes, far outside the window of about a minute. The e2e check R1 now waits it out and reports the delay.
+- **The owner sign-in lockout locked out the owner's own network.** Ten wrong passwords in a sliding 15 minutes lock an IP, and each e2e run sends two on purpose. Five runs in 25 minutes on 2026-11-12 tripped it (A1 got HTTP 429), which would also have blocked Jack signing in from the same network. A correct sign-in now clears the count: only the owner can produce one. The lock is still per IP, so someone on Jack's network guessing passwords can lock him out for 15 minutes.
 - **Real browsers send `Origin: null` from a `no-referrer` page.** That broke admin sign-in for Jack while every scripted test passed (section 0). Tests that set headers by hand don't prove a browser flow.
-- **The 1Password SDK on Workers** needs the build-time patch from the spike. The live bundle is 4.4 MB gzipped (Workers Paid), with a 39 ms startup. The WASM core is instantiated on the first secret read.
+- **The 1Password SDK on Workers** needs the build-time patch from the spike. With it the live bundle was 4.4 MB gzipped (Workers Paid), with a 39 ms startup, and the WASM core instantiated on the first secret read. It ran deployed from 2026-11-08 to 2026-11-12 but never read a secret, because no service account token was ever set. The live broker now runs the Worker-secrets entry point (325 KB gzipped).

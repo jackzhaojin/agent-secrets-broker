@@ -7,7 +7,7 @@ The test it is built to pass: *Claude Duet asks the broker to do something that 
 **Status: proof of concept.** Two deployments:
 
 - **The sandbox** holds dummy test secrets (`TEST_SECRET_A` to `G` style values) and calls a mock upstream it hosts itself. It carries the mechanism tests, all passing against the deployed URL, and Claude Duet's own run through a claude.ai connector on 2026-11-12: six of six ([docs/test-log.md](docs/test-log.md)).
-- **The live broker** holds real credentials in 1Password and is waiting on Jack's account setup ([docs/live-setup.md](docs/live-setup.md)).
+- **The live broker** is for real accounts. It keeps its secrets as Cloudflare Worker secrets for now (1Password is built but not in use) and is waiting on Jack's setup ([docs/live-setup.md](docs/live-setup.md)).
 
 Phase 2 results, negatives included, are in [docs/findings.md](docs/findings.md).
 
@@ -17,7 +17,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 
 | | Experiment | Result |
 |---|---|---|
-| A | da.live as Jack (Adobe sign-in held by the broker) | **Built, not yet run on the real account.** Deployed on the live broker; waiting on Jack's 1Password, Adobe credential and consent |
+| A | da.live as Jack (Adobe sign-in held by the broker) | **Built, not yet run on the real account.** Deployed on the live broker; waiting on Jack's owner password, Adobe credential and consent |
 | B | Best Buy orders with Jack's username and password | **Blocked** by Best Buy's terms for AI agents. No attempt made |
 | C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet: pending, Jack approved, ran once |
 | D | Negative tests: prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs | **Works with caveats.** The broker contains a fooled agent but can't prevent one; a stolen refresh token works until revoke; "duet" is any Claude on Jack's account |
@@ -48,7 +48,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 |---|---|---|
 | MCP server URL | `https://agent-secrets-broker-sandbox.jackzhaojin.workers.dev/mcp` | `https://agent-secrets-broker-live.jackzhaojin.workers.dev/mcp` |
 | Admin | `.../admin` | `.../admin` (and `/connect/adobe`) |
-| Secrets | KV vault, dummy values A to G | 1Password vault `Broker`, read-only service account |
+| Secrets | KV vault, dummy values A to G | Cloudflare Worker secrets set by Jack (1Password variant kept, not deployed) |
 | Tools | `whoami`, Mock Git tools | `whoami`, `da_list`, `da_get`, `da_put_draft` |
 | Upstream | Mock Git (`agent-secrets-broker-mockgit.jackzhaojin.workers.dev`) | Adobe da.live, a scratch folder Jack names |
 
@@ -164,10 +164,11 @@ npm run test:e2e                  # writes docs/test-log.md
 npm run scan                      # before every push: dummy values, forbidden files, key shapes, gitleaks
 ```
 
-Live broker (real secrets; Jack sets `OP_SERVICE_ACCOUNT_TOKEN` and `OWNER_PASSWORD` himself, see [docs/live-setup.md](docs/live-setup.md)):
+Live broker (real secrets; Jack sets `OWNER_PASSWORD`, `ADOBE_OAUTH_CLIENT_ID` and `ADOBE_OAUTH_CLIENT_SECRET` himself, see [docs/live-setup.md](docs/live-setup.md)):
 
 ```bash
-npm run deploy:live               # patches the 1Password SDK for workerd, deploys wrangler.live.jsonc
+npm run deploy:live               # deploys wrangler.live.jsonc (secrets as Worker secrets)
+npm run deploy:live:1password     # the 1Password variant instead: patches its SDK for workerd first
 npm run live -- init-keys         # ADMIN_TOKEN, COOKIE_SECRET, TOKEN_ENC_KEY: random, never printed
 npm run live -- status            # which secrets are set (names only)
 npm run test:live                 # live checks + Duet's calls from the audit log; add -- --tail 300 while Duet runs
@@ -201,7 +202,7 @@ Done this phase:
 
 - Per-call approval.
 - Negative tests (prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs), plus the fixes they drove.
-- The live deployment on 1Password.
+- The live deployment (built on 1Password, now running on Worker secrets by Jack's choice).
 - Adobe user-delegated OAuth with the DA tools.
 
 Results and the blocked Best Buy experiment are in [docs/findings.md](docs/findings.md).
@@ -215,7 +216,8 @@ Still open:
 
 ```
 src/index.ts          sandbox entry: KV vault, Mock Git tools, policy.json
-src/live.ts           live entry: 1Password, DA tools, Adobe connect, daily refresh cron, policy.live.json
+src/live.ts           live entry (Worker secrets); live-1password.ts is the 1Password variant; live-common.ts holds
+                      what they share: DA tools, Adobe connect, daily refresh cron, policy.live.json
 src/worker.ts         OAuthProvider wiring: routes, scopes, token lifetimes, CIMD, DCR, refresh revocation check
 src/deployment.ts     what differs between the two deployments
 src/app.ts            consent page, admin page and admin API, approvals pages, landing, healthz
@@ -225,7 +227,7 @@ src/upstream/adobe.ts Adobe IMS user OAuth: /connect/adobe, token refresh, admin
 src/sealed.ts         AES-GCM for upstream tokens at rest
 src/approvals.ts      per-call approval store (Durable Object)
 src/revocations.ts    revocation list (Durable Object): revoke takes effect at once
-src/secrets/          store.ts (SecretStore, KV vault, cache), onepassword.ts (live)
+src/secrets/          store.ts (SecretStore, KV vault, cache), worker-secrets.ts (live), onepassword.ts (kept)
 src/policy.ts, policy.json, policy.live.json, src/audit.ts, src/auth.ts, src/redact.ts, src/html.ts
 mock-upstream/        the Mock Git API Worker
 scripts/              sandbox secrets, live keys, admin CLI, 1Password patch, secret scan

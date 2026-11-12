@@ -22,7 +22,12 @@ export async function checkOwnerPassword(env: Env, request: Request, password: s
   const key = `rl:login:${clientIp(request)}`;
   const failures = Number((await env.BROKER_KV.get(key)) ?? '0');
   if (failures >= MAX_FAILURES) return 'locked';
-  if (env.OWNER_PASSWORD && password && (await safeEqual(password, env.OWNER_PASSWORD))) return 'ok';
+  if (env.OWNER_PASSWORD && password && (await safeEqual(password, env.OWNER_PASSWORD))) {
+    // A correct sign-in clears the count: only the owner can produce one, and without this a few
+    // typos spread over an afternoon (or a test run every few minutes) add up to a lockout.
+    if (failures > 0) await env.BROKER_KV.delete(key);
+    return 'ok';
+  }
   await env.BROKER_KV.put(key, String(failures + 1), { expirationTtl: LOCKOUT_SECONDS });
   return 'bad';
 }

@@ -1,5 +1,6 @@
 import { audit } from '../audit';
 import { hasAdminSession, sameOrigin } from '../auth';
+import { deployment } from '../deployment';
 import { baseUrl, type Env } from '../env';
 import { escape, htmlResponse } from '../html';
 import { getSealed, putSealed } from '../sealed';
@@ -10,7 +11,7 @@ import { handledSecretValues, secretsFor } from '../secrets/store';
  * broker keeps the tokens (encrypted in KV), refreshes them, and never hands one to an agent.
  *
  *   GET  /connect/adobe             owner session required; redirects to Adobe IMS (PKCE + state)
- *   GET  /connect/adobe/callback    exchanges the code with the client secret from 1Password
+ *   GET  /connect/adobe/callback    exchanges the code with the client secret from the secret store
  *   POST /connect/adobe/disconnect  revokes at Adobe (best effort) and forgets the tokens
  *
  * Adobe IMS facts (developer.adobe.com/developer-console/docs/guides/authentication/UserAuthentication):
@@ -150,7 +151,7 @@ export async function adobeRoutes(request: Request, env: Env, ctx: ExecutionCont
     if (!env.TOKEN_ENC_KEY) return page('Not ready', '<h1>Not ready</h1><p>TOKEN_ENC_KEY is not set, so the broker has nowhere safe to keep the tokens.</p>', 503);
     const creds = await clientCredentials(env);
     if (!creds) {
-      return page('Adobe client not configured', `<h1>Adobe client not configured</h1><p>The broker couldn't read <code>adobe-oauth/client_id</code> and <code>adobe-oauth/client_secret</code> from the 1Password vault <code>${escape(env.OP_VAULT ?? 'Broker')}</code>. Check the item and the service account (docs/live-setup.md).</p>`, 503);
+      return page('Adobe client not configured', `<h1>Adobe client not configured</h1><p>The broker couldn't read the Adobe client ID and client secret (<code>adobe-oauth/client_id</code>, <code>adobe-oauth/client_secret</code>). ${escape(deployment().secretStoreHint ?? '')} See docs/live-setup.md.</p>`, 503);
     }
     const state = b64url(crypto.getRandomValues(new Uint8Array(24)));
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -255,10 +256,11 @@ Refresh token: ${tokens.refresh_token ? `yes, Adobe's default lifetime is ${REFR
 
 /** For GET /admin/api/status: is everything Jack set up readable? Booleans and metadata only. */
 export async function liveStatus(env: Env): Promise<Record<string, unknown>> {
-  const creds = env.OP_SERVICE_ACCOUNT_TOKEN ? await clientCredentials(env) : null;
+  const creds = await clientCredentials(env);
   const t = await loadAdobe(env);
   return {
-    onepassword: { service_account_token_set: !!env.OP_SERVICE_ACCOUNT_TOKEN, vault: env.OP_VAULT ?? 'Broker', adobe_client_readable: !!creds },
+    secret_store: deployment().secretStoreName ?? 'unknown',
+    adobe_client_readable: !!creds,
     token_encryption_key_set: !!env.TOKEN_ENC_KEY,
     da_scratch: env.DA_SCRATCH || null,
     adobe: t

@@ -1,5 +1,7 @@
 # 1Password on Workers
 
+**Not in use right now.** On 2026-11-12 Jack moved the live broker to Cloudflare Worker secrets to get the Adobe experiment running ([findings.md](findings.md), A). The 1Password store and its entry point (`src/live-1password.ts`, `npm run deploy:live:1password`) are kept, and the open question below (a real service account) is still open.
+
 The spec puts real secrets in a 1Password vault named `Broker`, read by a read-only service account. The sandbox uses a KV namespace (`VAULT`) behind the same `SecretStore` interface instead, because it holds dummy values only. This page records what it takes to swap in 1Password.
 
 ## Does the 1Password JS SDK run in Workers?
