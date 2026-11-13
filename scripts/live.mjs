@@ -6,10 +6,16 @@
 //                                 agent-secrets-broker-live in one `wrangler secret bulk` (stdin);
 //                                 keeps only ADMIN_TOKEN in .secrets/live.json (0600, gitignored)
 //   npm run live -- status        which Worker secrets are set (names only) and /healthz
+//   npm run live -- adobe-connect listen on localhost:8976 for Adobe's sign-in redirect and forward
+//                                 the browser to the broker's callback; opens /connect/adobe.
+//                                 It sees only the one-time code (useless without the PKCE verifier
+//                                 and client secret in the Worker) and prints nothing from it.
 //
 // Admin API against the live broker: npm run admin -- --live clients | audit | approvals | policy
 
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROOT, SECRETS_DIR, wrangler } from './lib.mjs';
@@ -48,7 +54,32 @@ switch (cmd) {
     console.log('healthz:', JSON.stringify(h));
     break;
   }
+  case 'adobe-connect': {
+    const PORT = 8976;
+    let done;
+    const finished = new Promise((r) => { done = r; });
+    const handler = (req, res) => {
+      const url = new URL(req.url, `http://localhost:${PORT}`);
+      if (url.pathname !== '/callback') {
+        res.writeHead(404).end('Not found');
+        return;
+      }
+      // Pass Adobe's answer (code and state, or an error) on to the broker, in the same browser.
+      res.writeHead(302, { location: `${LIVE_BASE}/connect/adobe/callback${url.search}`, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }).end();
+      console.log(`Forwarded Adobe's redirect to the broker (${url.searchParams.has('code') ? 'with a code' : `error: ${url.searchParams.get('error') ?? 'no code'}`}).`);
+      done('forwarded');
+    };
+    const servers = ['127.0.0.1', '::1'].map((host) => createServer(handler).listen(PORT, host).on('error', (e) => console.error(`listen ${host}: ${e.code}`)));
+    console.log(`Listening on http://localhost:${PORT}/callback for up to 15 minutes.`);
+    console.log(`Opening ${LIVE_BASE}/connect/adobe : sign in with the owner password, then on Adobe's page.`);
+    if (!process.argv.includes('--no-open')) execFile('open', [`${LIVE_BASE}/connect/adobe`], () => {});
+    const outcome = await Promise.race([finished, new Promise((r) => setTimeout(() => r('timed out'), 15 * 60 * 1000))]);
+    await new Promise((r) => setTimeout(r, 500));
+    for (const srv of servers) srv.close();
+    console.log(outcome === 'forwarded' ? 'Done. The broker page in your browser says whether Adobe connected.' : 'Timed out waiting for the redirect.');
+    break;
+  }
   default:
-    console.error('Commands: init-keys, status');
+    console.error('Commands: init-keys, status, adobe-connect');
     process.exit(2);
 }

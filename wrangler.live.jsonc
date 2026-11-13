@@ -20,11 +20,15 @@
     // 2026-11-12 (https://main--www-eds--jackzhaojin.aem.page/drafts/sites-ai-webinar/). It holds
     // his real "Sites and AI" webinar page, so da_put_draft can replace that page: every call
     // needs his approval, and the approval page shows the path.
-    "DA_SCRATCH": "jackzhaojin/www-eds/drafts/sites-ai-webinar"
+    "DA_SCRATCH": "jackzhaojin/www-eds/drafts/sites-ai-webinar",
+    // Where Adobe sends the browser after sign-in. Adobe's server registers only redirect URIs it
+    // knows: the broker's own URL was refused, localhost accepted. `npm run live -- adobe-connect`
+    // listens there on Jack's Mac and forwards the browser (with the one-time code) to the broker.
+    "ADOBE_REDIRECT_URI": "http://localhost:8976/callback"
   },
   // Worker secrets, never committed:
   //   OWNER_PASSWORD                                        Jack, `wrangler secret put`
-  //   ADOBE_OAUTH_CLIENT_ID, ADOBE_OAUTH_CLIENT_SECRET      Jack, `wrangler secret put` (Adobe OAuth Web App credential)
+  //   ADOBE_OAUTH_CLIENT_ID, ADOBE_OAUTH_CLIENT_SECRET      issued by Adobe's MCP sign-in server, set by `node scripts/adobe-register.mjs` (never printed)
   //   OP_SERVICE_ACCOUNT_TOKEN  only for the 1Password variant (read-only service account, vault Broker)
   //   ADMIN_TOKEN, COOKIE_SECRET, TOKEN_ENC_KEY  random, `npm run live -- init-keys` (never printed)
   "kv_namespaces": [

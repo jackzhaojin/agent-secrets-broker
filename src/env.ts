@@ -31,6 +31,8 @@ export interface Env {
   OP_VAULT?: string;
   /** 32 random bytes, base64: encrypts upstream OAuth tokens at rest in KV. */
   TOKEN_ENC_KEY?: string;
+  /** Where Adobe sends the browser after sign-in. Adobe's server only registers redirect URIs it knows: localhost works, the broker's own URL doesn't. */
+  ADOBE_REDIRECT_URI?: string;
   /** The only da.live folder the DA tools may touch: "org/site/folder". */
   DA_SCRATCH?: string;
 }
