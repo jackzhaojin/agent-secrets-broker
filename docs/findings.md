@@ -109,7 +109,7 @@ Last updated 2026-11-12.
 
 | Limit | Expected (from docs) | Measured |
 |---|---|---|
-| Credential type available to a personal or org Adobe ID | OAuth Web App, if an API in the console offers user auth with `offline_access` ("Not all APIs and Services support `offline_access`") | pending |
+| Credential type available to a personal or org Adobe ID | OAuth Web App, if an API in the console offers user auth with `offline_access` ("Not all APIs and Services support `offline_access`") | **Edge Delivery Services API: OAuth Server-to-Server only** (Jack's console, org `jackzhaojin-gmail.com`, System Administrator, 2026-11-12). No user authentication option is offered for it. Other APIs: being tried |
 | Consent screen | Adobe's own page; company/school accounts may need "an Adobe review" for apps outside Development | pending |
 | Access token lifetime | 24 h | pending (shown on /admin and LV5) |
 | Refresh token lifetime | 14 days by default; an Adobe forum answer says the same refresh token comes back for 7 days, then a new one | pending (`refresh_token_changes` counter on /admin) |
