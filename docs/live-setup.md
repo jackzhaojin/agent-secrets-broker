@@ -4,7 +4,7 @@ The live broker (`agent-secrets-broker-live`) holds real credentials, so every p
 
 Live URL: `https://agent-secrets-broker-live.jackzhaojin.workers.dev` (MCP at `/mcp`, admin at `/admin`).
 
-> **On hold (2026-11-12).** Step 2 can't be done: Jack's Adobe Developer Console offers only server-to-server credentials for the Edge Delivery Services and I/O Management APIs, with no OAuth Web App option. See [findings.md](findings.md), A, for what blocked it and the routes left. The owner password and scratch folder below are already set.
+> **Changed (2026-11-13).** Step 2 below (an Adobe Developer Console credential) can't be done: the console offers only server-to-server credentials. The broker now signs in through Adobe's hosted DA MCP server instead, and Jack is connected. To reconnect: on the Mac with the repo run `npm run live -- adobe-connect` (it listens on localhost:8976 for Adobe's redirect and opens `/connect/adobe`), sign in with the owner password, then on Adobe's page. To register the broker with Adobe again: `node scripts/adobe-register.mjs --redirect http://localhost:8976/callback`. See [findings.md](findings.md), A.
 
 **Secrets are Cloudflare Worker secrets for now, not 1Password** (Jack's call, 2026-11-12, to get the Adobe experiment running). There's no vault and no service account to set up. The 1Password variant is still in the repo; see the end of this page.
 

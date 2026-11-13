@@ -175,7 +175,7 @@ export async function adobeRoutes(request: Request, env: Env, ctx: ExecutionCont
     const state = b64url(crypto.getRandomValues(new Uint8Array(24)));
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
     const challenge = b64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
-    await env.BROKER_KV.put(`${STATE_PREFIX}${state}`, verifier, { expirationTtl: 600 });
+    await env.BROKER_KV.put(`${STATE_PREFIX}${state}`, verifier, { expirationTtl: 900 });
     const authorize = new URL(`${AS}/oauth/authorize`);
     authorize.search = new URLSearchParams({
       client_id: creds.id,
@@ -193,7 +193,8 @@ export async function adobeRoutes(request: Request, env: Env, ctx: ExecutionCont
       headers: {
         location: authorize.toString(),
         // Lax, not Strict: the callback is a top-level redirect from Adobe's site.
-        'set-cookie': `${STATE_COOKIE}=${state}; Path=/connect/adobe; Secure; HttpOnly; SameSite=Lax; Max-Age=600`,
+        // A __Host- cookie must have Path=/ or browsers drop it without a word (they did, 2026-11-12).
+        'set-cookie': `${STATE_COOKIE}=${state}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=900`,
         'cache-control': 'no-store',
       },
     });
@@ -203,7 +204,7 @@ export async function adobeRoutes(request: Request, env: Env, ctx: ExecutionCont
     const state = url.searchParams.get('state') ?? '';
     const cookieState = (request.headers.get('cookie') ?? '').split(/;\s*/).find((c) => c.startsWith(`${STATE_COOKIE}=`))?.slice(STATE_COOKIE.length + 1);
     const verifier = state ? await env.BROKER_KV.get(`${STATE_PREFIX}${state}`) : null;
-    const clear = { 'set-cookie': `${STATE_COOKIE}=; Path=/connect/adobe; Secure; HttpOnly; SameSite=Lax; Max-Age=0` };
+    const clear = { 'set-cookie': `${STATE_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0` };
     if (!state || !verifier || cookieState !== state) {
       audit(env, ctx, { type: 'upstream', outcome: 'denied', tool: 'adobe', code: 'callback_bad_state' });
       return htmlResponse(400, 'Start again', '<h1>Start again</h1><p>This sign-in link expired, was already used, or was started in another browser. Open <a href="/connect/adobe">/connect/adobe</a> again.</p>', clear);
@@ -272,6 +273,14 @@ Refresh token: ${tokens.refresh_token ? 'yes; the broker refreshes before the ac
   return null;
 }
 
+/** Who the tokens belong to, for the owner's eyes: the stored account, else claims of the access token if it is a JWT. */
+function accountLabel(t: AdobeTokens): string | null {
+  if (t.account.email ?? t.account.name) return t.account.email ?? t.account.name ?? null;
+  const c = jwtClaims(t.access_token);
+  for (const k of ['email', 'preferred_username', 'name', 'user_id', 'sub']) if (typeof c[k] === 'string' && c[k]) return c[k] as string;
+  return null;
+}
+
 /** For GET /admin/api/status: is everything Jack set up readable? Booleans and metadata only. */
 export async function liveStatus(env: Env): Promise<Record<string, unknown>> {
   const creds = await clientCredentials(env);
@@ -286,7 +295,9 @@ export async function liveStatus(env: Env): Promise<Record<string, unknown>> {
     adobe: t
       ? {
           connected: true,
-          account: t.account.email ?? t.account.name ?? null,
+          account: accountLabel(t),
+          // Claim names only, to see what the token says about itself. Never the values.
+          access_token_claim_names: Object.keys(jwtClaims(t.access_token)).sort(),
           connected_at: new Date(t.connected_at).toISOString(),
           scope: t.scope ?? null,
           access_expires_at: new Date(t.access_expires_at).toISOString(),
@@ -305,7 +316,7 @@ export async function adobeAdminSection(env: Env): Promise<string> {
     return `<h2>Adobe (da.live)</h2><div class="card"><p>Not connected. On the Mac with the repo, run <code>npm run live -- adobe-connect</code> first (Adobe sends the sign-in back to localhost), then <a href="/connect/adobe">connect Adobe</a>. You sign in on Adobe's own page.</p>
 <p class="muted">Scratch folder: <code>${escape(env.DA_SCRATCH || '(not set)')}</code></p></div>`;
   }
-  return `<h2>Adobe (da.live)</h2><div class="card"><p>Connected as <strong>${escape(t.account.email ?? t.account.name ?? 'unknown')}</strong> since ${escape(fmt(t.connected_at))}.</p>
+  return `<h2>Adobe (da.live)</h2><div class="card"><p>Connected as <strong>${escape(accountLabel(t) ?? 'unknown (Adobe sent no identity claims)')}</strong> since ${escape(fmt(t.connected_at))}.</p>
 <p class="muted">Scopes: ${escape(t.scope ?? '(not reported)')}<br>Access token until ${escape(fmt(t.access_expires_at))} · refreshes: ${t.refresh_count} (refresh token replaced ${t.refresh_token_changes} times) · last refresh ${escape(fmt(t.last_refresh_at))}<br>
 Refresh token: ${t.refresh_token ? `held since ${escape(fmt(t.refresh_obtained_at))}` : 'none'} · scratch folder <code>${escape(env.DA_SCRATCH || '(not set)')}</code></p>
 <div class="row"><a href="/connect/adobe">Reconnect</a><form method="post" action="/connect/adobe/disconnect" style="display:inline"><button>Disconnect Adobe</button></form></div></div>`;

@@ -17,7 +17,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 
 | | Experiment | Result |
 |---|---|---|
-| A | da.live as Jack (Adobe sign-in held by the broker) | **Blocked as built.** Jack's Adobe Developer Console offers only server-to-server credentials for the APIs that fit, so there is no user sign-in for the broker to hold. Adobe's own hosted DA MCP server does sign users in; using it through the broker is untried |
+| A | da.live as Jack (Adobe sign-in held by the broker) | **Works with caveats, up to sign-in.** Adobe's Developer Console offers Jack's org only server-to-server credentials, so the broker signs in through Adobe's hosted DA MCP server with a localhost redirect. Jack is connected; Duet hasn't called the tools yet |
 | B | Best Buy orders with Jack's username and password | **Blocked** by Best Buy's terms for AI agents. No attempt made |
 | C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet: pending, Jack approved, ran once |
 | D | Negative tests: prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs | **Works with caveats.** The broker contains a fooled agent but can't prevent one; a stolen refresh token works until revoke; "duet" is any Claude on Jack's account |
@@ -30,13 +30,13 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 - **Contain a fooled agent.** Text from upstreams arrives marked untrusted. A call that tries to send out a credential (its own access token, a key) is refused, and writes wait for approval. A key embedded in upstream content is redacted.
 - **Cut a connection off at once.** Revoke takes effect on the next call and the next refresh, including tokens minted seconds earlier; that needed a fix, see findings D3.
 - **Rotate keys without a redeploy, and keep an audit trail.** The audit log records who called what and how it went, with no arguments, contents or tokens.
-- **Hold a user's own OAuth consent for an upstream.** The flow is built and deployed for Adobe (consent on the provider's page, token stored encrypted and refreshed), but it has never run: Adobe offers Jack's org no user sign-in credential to run it with (findings A).
+- **Hold a user's own sign-in for an upstream.** Jack signed in on Adobe's page; the broker stores the tokens encrypted and refreshes them, and its DA tools act as him through Adobe's hosted MCP server (findings A).
 
 **It can't, or doesn't yet:**
 
 - **Stop an agent from being fooled.** It limits what a fooled agent can do; it can't stop the agent from believing injected text.
 - **Detect a stolen refresh token.** The thief and the real client can both refresh until the owner revokes; there's no reuse detection.
-- **Get user-delegated access where the provider only issues service credentials.** For da.live, Adobe's Developer Console gave Jack's org server-to-server credentials only (findings A).
+- **Get user-delegated access from a provider's developer console when it only issues service credentials.** Adobe's console gave Jack's org server-to-server only; the broker got in through Adobe's own MCP server instead, on a localhost redirect Adobe happens to allow (findings A).
 - **Sign in with a username and password where the site forbids agents.** Best Buy's terms allow agents only through published methods, and there are none. Blocked, no attempt made (findings B).
 - **Solve CAPTCHAs, get past bot checks, or answer MFA prompts.** It doesn't, by design.
 - **Notify the owner of a pending approval.** Jack has to open the admin page; email or push needs an account.
@@ -51,7 +51,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 | Admin | `.../admin` | `.../admin` (and `/connect/adobe`) |
 | Secrets | KV vault, dummy values A to G | Cloudflare Worker secrets set by Jack (1Password variant kept, not deployed) |
 | Tools | `whoami`, Mock Git tools | `whoami`, `da_list`, `da_get`, `da_put_draft` |
-| Upstream | Mock Git (`agent-secrets-broker-mockgit.jackzhaojin.workers.dev`) | Adobe da.live, a scratch folder Jack names |
+| Upstream | Mock Git (`agent-secrets-broker-mockgit.jackzhaojin.workers.dev`) | Adobe da.live through Adobe's hosted MCP server, one scratch folder |
 
 Runtime: Cloudflare Workers (three Workers, six KV namespaces, Durable Objects for approvals and revocations).
 

@@ -9,14 +9,14 @@ Phase 2 pushes the broker against real accounts and records the negatives as car
 
 The sandbox (`agent-secrets-broker-sandbox`, dummy secrets) carries the mechanism tests. The live broker (`agent-secrets-broker-live`, real accounts) carries the real-account ones. Test evidence is in [test-log.md](test-log.md): the sandbox run is IDs P1 to L3, Claude Duet's own calls on the sandbox are under "Claude Duet on the sandbox" (DS1 to DS6), and the live checks under "Live broker" (LV1 to LV8).
 
-Last updated 2026-11-12.
+Last updated 2026-11-13.
 
 ## Summary
 
 | | Experiment | Verdict | Evidence |
 |---|---|---|---|
 | 0 | The Claude app connector and Claude Duet (acceptance tests 1 to 4) | **Works** (2026-11-12). Caveat: "duet" means any Claude on Jack's account, not Duet alone | DS1 to DS6 |
-| A | da.live as Jack (Adobe IMS, user-delegated OAuth) | **Blocked as built** (2026-11-12): Jack's Adobe Developer Console offers no user sign-in credential for the APIs that fit, only server-to-server. Adobe's documented user-delegated route is its own hosted DA MCP server; not yet tried | Jack's console screenshots; doc research below; live checks LV1 to LV7 |
+| A | da.live as Jack (user-delegated sign-in held by the broker) | **Works with caveats, up to sign-in** (2026-11-12): blocked through Adobe's Developer Console, working through Adobe's hosted DA MCP server with a localhost redirect. Jack is connected; the tools haven't been called by Duet yet | Jack's console screenshots; live audit log; LV5 |
 | B | Best Buy recent orders with Jack's username and password | **Blocked by terms of use** (no attempt made) | Best Buy Terms, "Digital Agents" section, updated 2026-09-25 |
 | C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet (pending, Jack approved, the repeat call ran once) | AP1 to AP6, DS6 |
 | D1 | Prompt injection via upstream content | **Works with caveats**: the broker contains it, it can't prevent it; Duet read a poisoned README and didn't act on it | N1, N2, DS5 |
@@ -72,9 +72,33 @@ Last updated 2026-11-12.
 
 ## A. Adobe da.live as Jack
 
-**Verdict: blocked as built** (2026-11-12). The broker's side is built and deployed, but the credential it needs can't be created in Jack's Adobe Developer Console. Nothing reached his Adobe account; no Adobe secret was ever set.
+**Verdict: works with caveats, up to sign-in** (2026-11-12). The first route (a Developer Console credential) is blocked. The second (Adobe's hosted DA MCP server) works: Jack signed in on Adobe's page at 00:27 UTC on 2026-11-13 and the broker holds his tokens. The DA tools haven't been called through it yet.
 
-### What blocked it
+### The route that works: Adobe's hosted DA MCP server
+
+- **Registration:** Adobe's authorization server (`oauth.adobeaemcloud.com`) registers clients dynamically, but only for redirect URIs it already knows.
+  - The broker's own callback was refused: "No IMS client configuration found for redirect URI".
+  - `http://localhost:8976/callback` was accepted (Jack's idea). Behind it, Adobe uses its own IMS client `aem-oauth-cursor`.
+  - The issued client ID and secret went straight into the Worker's secrets; nobody saw the secret.
+- **Sign-in with a localhost redirect, for a hosted broker:**
+  1. `/connect/adobe` (owner session) sends the browser to Adobe with PKCE and a `state` bound to the browser by a cookie.
+  2. Adobe sends the browser back to localhost on Jack's Mac, where `npm run live -- adobe-connect` is listening.
+  3. The helper forwards the browser, with the one-time code, to the broker's callback.
+  4. The broker exchanges the code with Adobe. The code is useless without the PKCE verifier and client secret, which stay in the Worker, so the tokens never touch the Mac.
+- **What Adobe granted:** scopes `aem.mcp.experience-workspace openid AdobeID read_organizations` (it added `read_organizations` itself).
+- **Token lifetimes:** access token 23 hours; a refresh token came with it. How long the refresh token lasts, and whether it rotates, isn't documented; the broker refreshes about daily and counts changes (shown on /admin).
+- **The broker never holds a raw Adobe token.** Adobe's access token is a wrapper: its claims are `aud`, `exp`, `iat`, `iss`, `jti`, `nbf`, `org`, and Jack's IMS token encrypted (`token`, `token_iv`, `token_kid`). It carries no name or email, so the broker can't show who signed in.
+- **Tools:** `da_list`, `da_get` and `da_put_draft` call Adobe's `da_list_sources`, `da_get_source` and `da_update_source` as Jack, through an MCP client in the Worker. The agent can't choose the upstream tool, so Adobe's delete, move, preview and publish tools are out of reach. The scratch-folder rules and per-call approval are unchanged.
+- **Caveats:**
+  - **Reconnecting needs the Mac.** The localhost redirect means a new sign-in only works from a machine running the helper.
+  - **The registration is unofficial.** The broker rides on a redirect URI Adobe allowlisted for local MCP clients such as Cursor. Adobe could tighten that. The supported path for a custom client is to ask Adobe to allowlist it (aemcs-mcp-feedback@adobe.com).
+  - **A browser bug cost one attempt.** The state cookie had a `__Host-` name with a path other than `/`, which browsers drop silently. Fixed; one more case of scripted checks not proving a browser flow.
+
+### The route that is blocked: a Developer Console credential
+
+Blocked 2026-11-12. The broker's side for this route was built and deployed first, but the credential it needs can't be created in Jack's Adobe Developer Console. No Adobe secret was ever set for it.
+
+#### What blocked it
 
 - **The plan** was an OAuth Web App credential (user sign-in, refresh token) from the Developer Console, with scopes `openid`, `AdobeID`, `read_organizations`, `offline_access`.
 - **What Jack's console offers** (org `jackzhaojin-gmail.com`, System Administrator): both APIs that fit, **Edge Delivery Services** and **I/O Management API**, offer only **OAuth Server-to-Server**. There is no User Authentication option on either.
@@ -85,7 +109,7 @@ Last updated 2026-11-12.
 - **Server-to-server is Adobe's documented route for a customer's own app:** get an Edge Delivery Services credential and add the technical account's email to the DA permissions sheet. That is a service identity, not Jack's.
 - **Still untested:** whether da.live would accept a user token from a customer's own credential. da-admin's code suggests yes, but no credential exists to try it with.
 
-### Adobe's own user-delegated route
+#### What the docs say about Adobe's own route
 
 **Adobe hosts an MCP server for DA that signs users in itself:** `https://mcp.adobeaemcloud.com/adobe/mcp/da` ([aem.live docs](https://www.aem.live/docs/ew/authoring/mcp): "handles Adobe IMS authentication automatically"). DA is now called Experience Workspace in those docs.
 
@@ -96,13 +120,13 @@ Last updated 2026-11-12.
   - The broker would add only what Adobe's server lacks: a scratch-folder limit, per-call approval, one audit log, and one policy across agents.
   - To keep those, the broker would become an OAuth client of Adobe's MCP server and pass its `da_*` tools through. That is a different build from the one deployed, and it depends on Adobe accepting the broker as a client.
 
-### Other routes that act as Jack, and why they don't fit
+#### Other routes that act as Jack, and why they don't fit
 
 - **da-auth-helper** (Adobe's own tool for agents): signs in with da.live's own client and a `localhost` redirect, returns a short-lived access token and no refresh token. A hosted Worker can't receive a localhost redirect, and Jack would have to paste a fresh token every day.
 - **Admin API keys** (aem.live): created with fixed roles, so they're a service identity, and documented only for `admin.hlx.page`, not da.live.
 - **Device-code sign-in:** not offered by Adobe IMS.
 
-### The original design, kept for the record
+#### The original design, kept for the record
 
 The remaining steps would have been Jack's: the owner password (set), an Adobe Developer Console credential (not available), the scratch folder name (set), and consent on Adobe's page. See [live-setup.md](live-setup.md).
 
