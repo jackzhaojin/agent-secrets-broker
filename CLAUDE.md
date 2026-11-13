@@ -1,6 +1,8 @@
 # agent-secrets-broker
 
-Remote MCP server + OAuth 2.1 authorization server on Cloudflare Workers that calls APIs for agents with secrets they never see. README.md has the design and what it can and can't do; docs/findings.md the Phase 2 results; docs/test-log.md the latest deployed test runs.
+Remote MCP server + OAuth 2.1 authorization server on Cloudflare Workers that calls APIs for agents with secrets they never see. README.md has what it can and can't do; docs/architecture.md the design with diagrams; docs/findings.md the Phase 2 results; docs/test-log.md the latest deployed test runs. Read ai-docs/agent-notes.md before working here: it has the code map and the traps already hit.
+
+- `docs/` is for people and AI agents; `ai-docs/` is for AI agents (specs kept verbatim, session records in `ai-docs/sessions/yyyy-mm-dd-topic.md`, working notes). Anything people need goes in `docs/`. Update docs/architecture.md when the design changes, and check Mermaid diagrams render (labels starting with `1.` break; keep them under about 880 px wide).
 
 - Node 22 (`source ~/.nvm/nvm.sh && nvm use 22`). `npm run typecheck`, `npm run dev`, `npm run test:e2e [-- --target local]`, `npm run deploy`, `npm run scan`.
 - Two deployments from one codebase: sandbox (`wrangler.jsonc`, entry `src/index.ts`, dummy secrets) and live (`wrangler.live.jsonc`, entry `src/live.ts`, real accounts; secrets are Worker secrets for now, Jack's choice on 2026-11-12, with the 1Password variant kept in `src/live-1password.ts`). Live: `npm run deploy:live`, `npm run test:live`, `npm run admin -- --live ...`.
