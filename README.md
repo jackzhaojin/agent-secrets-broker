@@ -17,7 +17,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 
 | | Experiment | Result |
 |---|---|---|
-| A | da.live as Jack (Adobe sign-in held by the broker) | **Built, not yet run on the real account.** Deployed on the live broker; waiting on Jack's owner password, Adobe credential and consent |
+| A | da.live as Jack (Adobe sign-in held by the broker) | **Blocked as built.** Jack's Adobe Developer Console offers only server-to-server credentials for the APIs that fit, so there is no user sign-in for the broker to hold. Adobe's own hosted DA MCP server does sign users in; using it through the broker is untried |
 | B | Best Buy orders with Jack's username and password | **Blocked** by Best Buy's terms for AI agents. No attempt made |
 | C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet: pending, Jack approved, ran once |
 | D | Negative tests: prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs | **Works with caveats.** The broker contains a fooled agent but can't prevent one; a stolen refresh token works until revoke; "duet" is any Claude on Jack's account |
@@ -30,12 +30,13 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 - **Contain a fooled agent.** Text from upstreams arrives marked untrusted. A call that tries to send out a credential (its own access token, a key) is refused, and writes wait for approval. A key embedded in upstream content is redacted.
 - **Cut a connection off at once.** Revoke takes effect on the next call and the next refresh, including tokens minted seconds earlier; that needed a fix, see findings D3.
 - **Rotate keys without a redeploy, and keep an audit trail.** The audit log records who called what and how it went, with no arguments, contents or tokens.
-- **Hold a user's own OAuth consent for an upstream (live, Adobe).** Jack consents on Adobe's page, and the broker stores the token encrypted and refreshes it. Built and deployed; the first real consent is pending.
+- **Hold a user's own OAuth consent for an upstream.** The flow is built and deployed for Adobe (consent on the provider's page, token stored encrypted and refreshed), but it has never run: Adobe offers Jack's org no user sign-in credential to run it with (findings A).
 
 **It can't, or doesn't yet:**
 
 - **Stop an agent from being fooled.** It limits what a fooled agent can do; it can't stop the agent from believing injected text.
 - **Detect a stolen refresh token.** The thief and the real client can both refresh until the owner revokes; there's no reuse detection.
+- **Get user-delegated access where the provider only issues service credentials.** For da.live, Adobe's Developer Console gave Jack's org server-to-server credentials only (findings A).
 - **Sign in with a username and password where the site forbids agents.** Best Buy's terms allow agents only through published methods, and there are none. Blocked, no attempt made (findings B).
 - **Solve CAPTCHAs, get past bot checks, or answer MFA prompts.** It doesn't, by design.
 - **Notify the owner of a pending approval.** Jack has to open the admin page; email or push needs an account.

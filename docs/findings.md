@@ -16,7 +16,7 @@ Last updated 2026-11-12.
 | | Experiment | Verdict | Evidence |
 |---|---|---|---|
 | 0 | The Claude app connector and Claude Duet (acceptance tests 1 to 4) | **Works** (2026-11-12). Caveat: "duet" means any Claude on Jack's account, not Duet alone | DS1 to DS6 |
-| A | da.live as Jack (Adobe IMS, user-delegated OAuth) | **Pending** (built and deployed; waiting on Jack's owner password, Adobe credential and consent) | Research below; live checks LV1 to LV7 |
+| A | da.live as Jack (Adobe IMS, user-delegated OAuth) | **Blocked as built** (2026-11-12): Jack's Adobe Developer Console offers no user sign-in credential for the APIs that fit, only server-to-server. Adobe's documented user-delegated route is its own hosted DA MCP server; not yet tried | Jack's console screenshots; doc research below; live checks LV1 to LV7 |
 | B | Best Buy recent orders with Jack's username and password | **Blocked by terms of use** (no attempt made) | Best Buy Terms, "Digital Agents" section, updated 2026-09-25 |
 | C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet (pending, Jack approved, the repeat call ran once) | AP1 to AP6, DS6 |
 | D1 | Prompt injection via upstream content | **Works with caveats**: the broker contains it, it can't prevent it; Duet read a poisoned README and didn't act on it | N1, N2, DS5 |
@@ -72,7 +72,39 @@ Last updated 2026-11-12.
 
 ## A. Adobe da.live as Jack
 
-**Verdict: pending.** Everything up to Jack's consent is built and deployed on the live broker. The remaining steps are his: the owner password, an Adobe Developer Console credential (its client ID and secret set as Worker secrets), the scratch folder name, and consent on Adobe's page. See [live-setup.md](live-setup.md).
+**Verdict: blocked as built** (2026-11-12). The broker's side is built and deployed, but the credential it needs can't be created in Jack's Adobe Developer Console. Nothing reached his Adobe account; no Adobe secret was ever set.
+
+### What blocked it
+
+- **The plan** was an OAuth Web App credential (user sign-in, refresh token) from the Developer Console, with scopes `openid`, `AdobeID`, `read_organizations`, `offline_access`.
+- **What Jack's console offers** (org `jackzhaojin-gmail.com`, System Administrator): both APIs that fit, **Edge Delivery Services** and **I/O Management API**, offer only **OAuth Server-to-Server**. There is no User Authentication option on either.
+- **What the docs say:** user sign-in credentials are per API ("Depending on the selected API, some platforms may not be available to use with that API"), and no list says which. The APIs documented with user sign-in don't fit:
+  - **Adobe Analytics** has the right scopes but needs an Analytics product profile.
+  - **Frame.io** offers `openid email profile offline_access` without `AdobeID` or `read_organizations`, and needs a Frame.io account.
+  - **Lightroom** is partner-only and needs Adobe review.
+- **Server-to-server is Adobe's documented route for a customer's own app:** get an Edge Delivery Services credential and add the technical account's email to the DA permissions sheet. That is a service identity, not Jack's.
+- **Still untested:** whether da.live would accept a user token from a customer's own credential. da-admin's code suggests yes, but no credential exists to try it with.
+
+### Adobe's own user-delegated route
+
+**Adobe hosts an MCP server for DA that signs users in itself:** `https://mcp.adobeaemcloud.com/adobe/mcp/da` ([aem.live docs](https://www.aem.live/docs/ew/authoring/mcp): "handles Adobe IMS authentication automatically"). DA is now called Experience Workspace in those docs.
+
+- **Its authorization server** (`oauth.adobeaemcloud.com`) advertises authorization code with PKCE, refresh tokens, a registration endpoint, and scopes for read or full access to Experience Workspace.
+- **Custom clients may need allowlisting:** "If you need to allowlist a custom MCP client, reach out" (aemcs-mcp-feedback@adobe.com). Whether it would register the broker is untested.
+- **What that means for the broker:**
+  - Claude can use DA as Jack with no broker at all, by adding Adobe's MCP server as a connector. The Claude app holds the token, the model never sees it, and Adobe's own tools apply Jack's permissions.
+  - The broker would add only what Adobe's server lacks: a scratch-folder limit, per-call approval, one audit log, and one policy across agents.
+  - To keep those, the broker would become an OAuth client of Adobe's MCP server and pass its `da_*` tools through. That is a different build from the one deployed, and it depends on Adobe accepting the broker as a client.
+
+### Other routes that act as Jack, and why they don't fit
+
+- **da-auth-helper** (Adobe's own tool for agents): signs in with da.live's own client and a `localhost` redirect, returns a short-lived access token and no refresh token. A hosted Worker can't receive a localhost redirect, and Jack would have to paste a fresh token every day.
+- **Admin API keys** (aem.live): created with fixed roles, so they're a service identity, and documented only for `admin.hlx.page`, not da.live.
+- **Device-code sign-in:** not offered by Adobe IMS.
+
+### The original design, kept for the record
+
+The remaining steps would have been Jack's: the owner password (set), an Adobe Developer Console credential (not available), the scratch folder name (set), and consent on Adobe's page. See [live-setup.md](live-setup.md).
 
 **Secret store: Cloudflare Worker secrets, not 1Password, for now.** The Phase 2 brief put the live broker on 1Password. On 2026-11-12 Jack chose Worker secrets instead, to get the Adobe experiment running without first setting up a vault and a service account. This is a deliberate change to that rule.
 
@@ -109,7 +141,7 @@ Last updated 2026-11-12.
 
 | Limit | Expected (from docs) | Measured |
 |---|---|---|
-| Credential type available to a personal or org Adobe ID | OAuth Web App, if an API in the console offers user auth with `offline_access` ("Not all APIs and Services support `offline_access`") | **Edge Delivery Services API: OAuth Server-to-Server only** (Jack's console, org `jackzhaojin-gmail.com`, System Administrator, 2026-11-12). No user authentication option is offered for it. Other APIs: being tried |
+| Credential type available to a personal or org Adobe ID | OAuth Web App, if an API in the console offers user auth with `offline_access` ("Not all APIs and Services support `offline_access`") | **Not available.** Edge Delivery Services API and I/O Management API: OAuth Server-to-Server only (Jack's console, 2026-11-12) |
 | Consent screen | Adobe's own page; company/school accounts may need "an Adobe review" for apps outside Development | pending |
 | Access token lifetime | 24 h | pending (shown on /admin and LV5) |
 | Refresh token lifetime | 14 days by default; an Adobe forum answer says the same refresh token comes back for 7 days, then a new one | pending (`refresh_token_changes` counter on /admin) |

@@ -4,6 +4,8 @@ The live broker (`agent-secrets-broker-live`) holds real credentials, so every p
 
 Live URL: `https://agent-secrets-broker-live.jackzhaojin.workers.dev` (MCP at `/mcp`, admin at `/admin`).
 
+> **On hold (2026-11-12).** Step 2 can't be done: Jack's Adobe Developer Console offers only server-to-server credentials for the Edge Delivery Services and I/O Management APIs, with no OAuth Web App option. See [findings.md](findings.md), A, for what blocked it and the routes left. The owner password and scratch folder below are already set.
+
 **Secrets are Cloudflare Worker secrets for now, not 1Password** (Jack's call, 2026-11-12, to get the Adobe experiment running). There's no vault and no service account to set up. The 1Password variant is still in the repo; see the end of this page.
 
 ## 1. Owner password
