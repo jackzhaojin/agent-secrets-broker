@@ -53,7 +53,7 @@ Read `CLAUDE.md` first: it has the rules. This file has the context behind them.
 
 - **"duet" is not Duet.** A connector belongs to Jack's Claude account, so any Claude on it that loads connectors reaches the broker as the same agent. The OAuth client ID identifies the app, not a user or an agent.
 - **Adobe's Developer Console can't issue the credential you'd expect.** For da.live it offers Jack's org server-to-server only. The working route is Adobe's hosted DA MCP server, whose sign-in server registers clients only for callback addresses it knows: `http://localhost:8976/callback` works, the broker's own URL doesn't.
-- **The broker never holds a raw Adobe token.** Adobe's access token is a wrapper around an encrypted IMS token with no identity claims.
+- **The broker never holds a raw Adobe token.** Adobe's access token is a wrapper around an encrypted IMS token. No ID token, email or name comes with it. The sign-in token had no `sub`; the first refreshed one did (a stable Adobe user ID). Never put that ID in the repo: `test/live.mjs` masks it in the test log.
 - **Reconnecting Adobe needs Jack's Mac**, because the sign-in returns to localhost. `npm run live -- adobe-connect` runs the helper.
 - **The live secrets are Worker secrets, not 1Password**, by Jack's choice on 2026-11-12. The 1Password path is built and unproven with a real service account.
 
@@ -71,7 +71,7 @@ npm run test:live                   # live checks that need no owner password
 - Approval notifications: the admin page only. Email or push needs an account Jack would set up.
 - Approval friction: reads run without approval on live now. A time-boxed or batched approval isn't built.
 - 1Password with a real service account: untested.
-- Per-agent identity (so "duet" means Duet) and multi-user (separate people, separate permissions): not built.
+- Per-agent identity (so "duet" means Duet) and multi-user (separate people, separate permissions): not built. Options talked through with Jack on 2026-11-12: an identity provider (Google, Microsoft, Cloudflare Access) in place of the owner password; or Adobe's sign-in doing both jobs, which gives a user ID but no email or name. Also discussed, not built: a `local` deployment on localhost for local agents (weaker isolation, no helper hop).
 - The Adobe client registration rides on a localhost callback Adobe allows for local tools. The supported route is asking Adobe to allowlist the broker.
 - `agent-test.html` is still in the scratch folder on da.live; the broker has no delete tool.
 - The sandbox connector in Jack's claude.ai was disconnected by a test run and hasn't been reconnected.

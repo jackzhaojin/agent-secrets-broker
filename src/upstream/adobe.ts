@@ -1,5 +1,5 @@
 import { audit } from '../audit';
-import { hasAdminSession, sameOrigin } from '../auth';
+import { hasAdminSession, hasAdminToken, sameOrigin } from '../auth';
 import { deployment } from '../deployment';
 import { baseUrl, type Env } from '../env';
 import { escape, htmlResponse } from '../html';
@@ -48,6 +48,9 @@ export interface AdobeTokens {
   refresh_obtained_at?: number;
   scope?: string;
   account: { email?: string; name?: string; user_id?: string };
+  /** Field names of Adobe's last token response and claim names of its last ID token. Names only, to see what Adobe says about who signed in. */
+  token_response_keys?: string[];
+  id_token_claim_names?: string[];
   connected_at: number;
   last_refresh_at?: number;
   refresh_count: number;
@@ -95,6 +98,8 @@ function tokensFrom(body: Record<string, unknown>, prev?: AdobeTokens): Omit<Ado
     access_expires_at: now + ms,
     refresh_obtained_at: newRefresh && newRefresh !== prev?.refresh_token ? now : prev?.refresh_obtained_at,
     scope: typeof body.scope === 'string' ? body.scope : prev?.scope,
+    token_response_keys: Object.keys(body).sort(),
+    id_token_claim_names: typeof body.id_token === 'string' ? Object.keys(jwtClaims(body.id_token)).sort() : prev?.id_token_claim_names,
     last_refresh_at: prev ? now : undefined,
     refresh_count: prev ? prev.refresh_count + 1 : 0,
     refresh_token_changes: prev ? prev.refresh_token_changes + (newRefresh && newRefresh !== prev.refresh_token ? 1 : 0) : 0,
@@ -116,7 +121,7 @@ async function refresh(env: Env, ctx: ExecutionContext | null, t: AdobeTokens, r
     else console.warn(JSON.stringify({ upstream: 'adobe', msg: 'refresh failed', code: r.error }));
     return { error: r.status === 400 || r.status === 401 ? 'adobe_reconnect_needed' : 'adobe_refresh_failed' };
   }
-  const next: AdobeTokens = { ...t, ...tokensFrom(r.body, t) };
+  const next: AdobeTokens = { ...t, ...tokensFrom(r.body, t), account: accountFrom(r.body.id_token, t.account) };
   await putSealed(env, TOKENS_KEY, next);
   if (ctx) audit(env, ctx, { type: 'upstream', outcome: 'ok', tool: 'adobe', code: `refreshed_${reason}${next.refresh_token_changes > t.refresh_token_changes ? '_new_refresh_token' : ''}` });
   return remember(next);
@@ -226,16 +231,10 @@ export async function adobeRoutes(request: Request, env: Env, ctx: ExecutionCont
     const base = tokensFrom(r.body);
     handledSecretValues.add(base.access_token);
     if (base.refresh_token) handledSecretValues.add(base.refresh_token);
-    // Who consented (shown to the owner; never the token): the id_token's claims, if one came.
-    const who = jwtClaims(r.body.id_token);
     const tokens: AdobeTokens = {
       ...base,
       refresh_obtained_at: base.refresh_token ? Date.now() : undefined,
-      account: {
-        email: typeof who.email === 'string' ? who.email : undefined,
-        name: typeof who.name === 'string' ? who.name : undefined,
-        user_id: typeof who.sub === 'string' ? who.sub : undefined,
-      },
+      account: accountFrom(r.body.id_token),
       connected_at: Date.now(),
     };
     await putSealed(env, TOKENS_KEY, tokens);
@@ -243,12 +242,21 @@ export async function adobeRoutes(request: Request, env: Env, ctx: ExecutionCont
     return htmlResponse(
       200,
       'Adobe connected',
-      `<h1>Adobe connected</h1><div class="card"><p>Signed in as <strong>${escape(tokens.account.email ?? tokens.account.name ?? 'unknown')}</strong>.</p>
+      `<h1>Adobe connected</h1><div class="card"><p>Signed in as <strong>${escape(accountLabel(tokens) ?? 'unknown (Adobe sent no identity claims)')}</strong>.</p>
 <p class="muted">Scopes granted: ${escape(tokens.scope ?? '(not reported)')}<br>Access token valid until ${escape(fmt(tokens.access_expires_at))}<br>
 Refresh token: ${tokens.refresh_token ? 'yes; the broker refreshes before the access token expires and about once a day' : '<strong>none</strong>: the connection ends when the access token expires'}</p></div>
 <p><a href="/admin">Back to admin</a></p>`,
       clear,
     );
+  }
+
+  if (url.pathname === '/connect/adobe/refresh' && request.method === 'POST') {
+    // Refresh now, to prove the refresh token works while the owner is around. Answers with a code, never a token.
+    const allowed = (await hasAdminToken(env, request)) || ((await hasAdminSession(env, request)) && sameOrigin(env, request));
+    if (!allowed) return Response.json({ error: 'forbidden' }, { status: 403 });
+    const t = await loadAdobe(env);
+    const r = t ? await refresh(env, ctx, t, 'manual') : { error: 'adobe_not_connected' };
+    return Response.json({ outcome: 'error' in r ? r.error : 'refreshed' }, { status: 'error' in r ? 502 : 200, headers: { 'cache-control': 'no-store' } });
   }
 
   if (url.pathname === '/connect/adobe/disconnect' && request.method === 'POST') {
@@ -273,9 +281,17 @@ Refresh token: ${tokens.refresh_token ? 'yes; the broker refreshes before the ac
   return null;
 }
 
+/** Who signed in, from the ID token's claims if Adobe sent one (shown to the owner; never the token). Keeps what is already known. */
+function accountFrom(idToken: unknown, prev: AdobeTokens['account'] = {}): AdobeTokens['account'] {
+  const who = jwtClaims(idToken);
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  return { email: str(who.email) ?? prev.email, name: str(who.name) ?? prev.name, user_id: str(who.sub) ?? prev.user_id };
+}
+
 /** Who the tokens belong to, for the owner's eyes: the stored account, else claims of the access token if it is a JWT. */
 function accountLabel(t: AdobeTokens): string | null {
-  if (t.account.email ?? t.account.name) return t.account.email ?? t.account.name ?? null;
+  const known = t.account.email ?? t.account.name ?? t.account.user_id;
+  if (known) return known;
   const c = jwtClaims(t.access_token);
   for (const k of ['email', 'preferred_username', 'name', 'user_id', 'sub']) if (typeof c[k] === 'string' && c[k]) return c[k] as string;
   return null;
@@ -296,6 +312,11 @@ export async function liveStatus(env: Env): Promise<Record<string, unknown>> {
       ? {
           connected: true,
           account: accountLabel(t),
+          // Which identity fields the broker holds, and what Adobe's responses contained. Names and shapes only.
+          account_fields: Object.entries(t.account).filter(([, v]) => !!v).map(([k]) => k).sort(),
+          user_id_shape: t.account.user_id ? t.account.user_id.replace(/^[^@]+/, (m) => `<${m.length} chars>`) : null,
+          token_response_keys: t.token_response_keys ?? null,
+          id_token_claim_names: t.id_token_claim_names ?? null,
           // Claim names only, to see what the token says about itself. Never the values.
           access_token_claim_names: Object.keys(jwtClaims(t.access_token)).sort(),
           connected_at: new Date(t.connected_at).toISOString(),

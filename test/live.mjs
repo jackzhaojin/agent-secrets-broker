@@ -104,7 +104,7 @@ async function main() {
       `secret store ${s.secret_store}`,
       `Adobe client ID and secret ${s.adobe_client_readable ? 'readable' : 'NOT set'}`,
       `scratch ${s.da_scratch ?? 'NOT set'}`,
-      a.connected ? `Adobe connected as ${a.account} (scope ${a.scope}; access until ${a.access_expires_at}; refresh token ${a.has_refresh_token ? 'yes' : 'no'}; refreshed ${a.refresh_count}x, refresh token replaced ${a.refresh_token_changes}x)` : 'Adobe not connected',
+      a.connected ? `Adobe connected; the broker ${a.account ? `knows who signed in (${String(a.account).replace(/^[^@]+/, (m) => `<${m.length} chars>`)}; identity from ${a.id_token_claim_names ? 'an ID token' : 'the access token'}; token response fields ${(a.token_response_keys ?? []).join(', ') || 'not recorded'})` : 'can\'t tell who signed in'} (scope ${a.scope}; access until ${a.access_expires_at}; refresh token ${a.has_refresh_token ? 'yes' : 'no'}; refreshed ${a.refresh_count}x, refresh token replaced ${a.refresh_token_changes}x)` : 'Adobe not connected',
     ].join('; ');
   }, { info: true });
 

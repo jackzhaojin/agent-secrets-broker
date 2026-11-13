@@ -179,7 +179,7 @@ About 20 lines of Node (`npm run live -- adobe-connect`). It listens on `localho
 
 - **Reconnecting needs the Mac.** A fresh Adobe sign-in only works from a machine running the helper. Day to day this doesn't matter: the broker refreshes its own tokens.
 - **The registration is unofficial.** The broker rides on a callback address Adobe allows for local tools. The supported route for a hosted client is to ask Adobe to allowlist it.
-- **Adobe's token is a wrapper.** It contains Jack's real Adobe sign-in, encrypted by Adobe. The broker can use it but can't read who it belongs to.
+- **Adobe's token is a wrapper.** It contains Jack's real Adobe sign-in, encrypted by Adobe. The broker can use it but can't open it. Adobe sends no ID token, name or email. After the first refresh the wrapper does carry a stable Adobe user ID (`sub`), which is enough to key roles on but not to show a name ([findings](findings.md#who-signed-in-what-adobe-tells-the-broker)).
 
 ## A tool call, end to end
 

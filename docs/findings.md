@@ -98,13 +98,26 @@ Broker-side evidence is in the test log under "Claude Duet on the live broker" (
   3. The helper forwards the browser, with the one-time code, to the broker's callback.
   4. The broker exchanges the code with Adobe. The code is useless without the PKCE verifier and client secret, which stay in the Worker, so the tokens never touch the Mac.
 - **What Adobe granted:** scopes `aem.mcp.experience-workspace openid AdobeID read_organizations` (it added `read_organizations` itself).
-- **Token lifetimes:** access token 23 hours; a refresh token came with it. How long the refresh token lasts, and whether it rotates, isn't documented; the broker refreshes about daily and counts changes (shown on /admin).
-- **The broker never holds a raw Adobe token.** Adobe's access token is a wrapper: its claims are `aud`, `exp`, `iat`, `iss`, `jti`, `nbf`, `org`, and Jack's IMS token encrypted (`token`, `token_iv`, `token_kid`). It carries no name or email, so the broker can't show who signed in.
+- **Token lifetimes:** access token 23 hours; a refresh token came with it. The first real refresh (2026-11-13 04:49 UTC, triggered by hand) worked and returned a new refresh token, so it rotates. How long an unused one lasts isn't documented; the broker refreshes about daily and counts changes (shown on /admin).
+- **The broker never holds a raw Adobe token.** Adobe's access token is a wrapper: its claims are `aud`, `exp`, `iat`, `iss`, `jti`, `nbf`, `org`, and Jack's IMS token encrypted (`token`, `token_iv`, `token_kid`). It carries no name or email. Whether it says who signed in at all turned out to depend on the token: see the next section.
 - **Tools:** `da_list`, `da_get` and `da_put_draft` call Adobe's `da_list_sources`, `da_get_source` and `da_update_source` as Jack, through an MCP client in the Worker. The agent can't choose the upstream tool, so Adobe's delete, move, preview and publish tools are out of reach. The scratch-folder rules and per-call approval are unchanged.
 - **Caveats:**
   - **Reconnecting needs the Mac.** The localhost redirect means a new sign-in only works from a machine running the helper.
   - **The registration is unofficial.** The broker rides on a redirect URI Adobe allowlisted for local MCP clients such as Cursor. Adobe could tighten that. The supported path for a custom client is to ask Adobe to allowlist it (aemcs-mcp-feedback@adobe.com).
   - **A browser bug cost one attempt.** The state cookie had a `__Host-` name with a path other than `/`, which browsers drop silently. Fixed; one more case of scripted checks not proving a browser flow.
+
+### Who signed in: what Adobe tells the broker
+
+**Works with caveats.** Jack's question: could one Adobe sign-in both connect the broker to da.live and tell the broker who the user is, so roles can be assigned per person? Checked on 2026-11-13 by recording the field names of Adobe's token responses (names only, on the live status).
+
+- **There is no ID token.** The sign-in server's OpenID metadata advertises ID token signing (`ES256`), and the broker asks for the `openid` scope, but the token response holds only `access_token`, `expires_in`, `refresh_token` and `token_type`. There is no user-info endpoint either.
+- **The access token names the user, but only after a refresh.** The token from the first sign-in had no `sub` claim. The token from the first refresh, four hours later, has `sub` (Jack's Adobe user ID, 24 characters followed by `@AdobeID`) and `azp`. Whether a new sign-in now gets `sub` straight away, or only refreshed tokens do, is untested: it needs Jack to sign in again.
+- **No email and no name, anywhere.** The only scopes on offer are the MCP ones plus `openid` and `AdobeID`; there is no `email` or `profile` scope to ask for. Adobe's DA MCP server has no tool that returns the caller either (17 tools, read from its public source).
+- **What that is enough for:** a stable ID per person, plus the `org` claim. Roles can be keyed on it. Someone has to map each ID to a person once, because the broker can't show a name by itself.
+- **Caveats:**
+  - **This is an access token, not an ID token.** Its audience is Adobe's MCP server, not the broker. The broker receives it directly from Adobe's token endpoint in exchange for a code it handled itself, which is why it can be trusted here, and its signature can be checked against Adobe's published keys (the broker doesn't yet). It isn't a use Adobe has documented.
+  - **A new connection may need one refresh before the broker knows who it is.** The broker can do that itself right after sign-in.
+- **The cleaner design for per-person roles** is still a separate identity provider (Google or Microsoft) for who the person is, with Adobe linked afterwards as one of their accounts. That gives an email, a name and groups.
 
 ### The route that is blocked: a Developer Console credential
 
