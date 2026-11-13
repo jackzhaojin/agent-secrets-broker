@@ -15,7 +15,7 @@ Phase 2 results, negatives included, are in [docs/findings.md](docs/findings.md)
 
 Two folders, for two kinds of reader:
 
-- **[`docs/`](docs/README.md) is for people and AI agents.** Start with the [architecture guide](docs/architecture.md): diagrams of the broker, the two sign-ins, how the localhost redirect hands the broker a one-time code that it swaps for tokens, and a tool call with approval.
+- **[`docs/`](docs/README.md) is for people and AI agents.** Start with the [architecture guide](docs/architecture.md): diagrams of the broker, the two sign-ins, how the localhost redirect hands the broker a one-time code that it swaps for tokens, and a tool call with approval, plus what the broker knows about who the user is.
 - **[`ai-docs/`](ai-docs/README.md) is for AI agents.** It holds the context an agent needs before working here: the original specs kept verbatim, session records of what was decided and what failed, and working notes.
 
 | Start here | For |
@@ -57,6 +57,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 - **Solve CAPTCHAs, get past bot checks, or answer MFA prompts.** It doesn't, by design.
 - **Notify the owner of a pending approval, or approve in bulk.** Jack has to open the admin page for each call; one simple da.live job took three approvals. Email or push needs an account.
 - **Limit an upstream token to less than the user's own rights.** Jack's Adobe token can write wherever he can; only the broker enforces the scratch folder.
+- **Tell one person from another.** There is one owner and one password, and the Claude app tells the broker nothing about who is using it. Adobe's sign-in does yield a stable user ID (no email or name), which could key per-person roles; that and the alternatives are in the [architecture guide](docs/architecture.md#who-is-the-user). Not built.
 - **Tell one Claude from another.** A connector added in claude.ai belongs to Jack's account, so every Claude on it that loads connectors (Duet, a normal chat, Claude Code) reaches the broker as the same agent. Confirmed 2026-11-12: a Claude Code session showed up as `duet`. Narrow tool lists, approval on writes and revoking when idle limit this; binding to one agent needs that agent to prove its identity (findings, section 0).
 - **Hold two connections from one app.** A new consent from the same app (same client ID) replaces the earlier connection; the consent page warns before it does.
 - **Tell people apart.** There is one owner. The OAuth client ID identifies the app (every Claude user presents the same published ID), not the person, and every connection is approved with the one owner password. Separate users with their own permissions, accounts and approvals would need per-person sign-in on the consent page (for example Google sign-in for an allow-list of emails). Not built.

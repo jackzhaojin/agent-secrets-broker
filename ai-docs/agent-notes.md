@@ -25,7 +25,7 @@ Read `CLAUDE.md` first: it has the rules. This file has the context behind them.
 | `src/upstream/adobe-mcp.ts` | The broker as an MCP client of Adobe's hosted DA MCP server |
 | `src/secrets/` | `SecretStore` and its three implementations: KV vault, Worker secrets, 1Password |
 | `mock-upstream/` | The Mock Git Worker: a fake API that leaks keys on purpose, so tests can prove the broker strips them |
-| `scripts/` | `sandbox.mjs` (dummy secrets), `live.mjs` (live keys, status, the localhost sign-in helper), `adobe-register.mjs`, `admin.mjs`, `secret-scan.mjs` |
+| `scripts/` | `sandbox.mjs` (dummy secrets), `live.mjs` (live keys, secret names, the localhost sign-in helper), `adobe-register.mjs`, `admin.mjs` (connections, audit, approvals, policy, status, Adobe refresh), `secret-scan.mjs` |
 | `test/e2e.mjs` | The sandbox end-to-end test. Writes the top of `docs/test-log.md` |
 | `test/duet.mjs` | Reads Claude Duet's own calls from an audit log and writes its section of the test log (`--live` for the live broker) |
 | `test/live.mjs` | Checks against the live broker that need no owner password |
@@ -63,6 +63,8 @@ Read `CLAUDE.md` first: it has the rules. This file has the context behind them.
 npm run live -- status              # which live secrets are set (names only) and /healthz
 npm run admin -- clients            # sandbox connections; add --live for the live broker
 npm run admin -- --live audit 30    # recent live audit lines
+npm run admin -- --live status      # setup and the Adobe connection: names, shapes, claim names (user ID masked)
+npm run admin -- --live adobe-refresh   # refresh the Adobe tokens now (the daily cron's job, on demand)
 npm run test:live                   # live checks that need no owner password
 ```
 
@@ -71,7 +73,7 @@ npm run test:live                   # live checks that need no owner password
 - Approval notifications: the admin page only. Email or push needs an account Jack would set up.
 - Approval friction: reads run without approval on live now. A time-boxed or batched approval isn't built.
 - 1Password with a real service account: untested.
-- Per-agent identity (so "duet" means Duet) and multi-user (separate people, separate permissions): not built. Options talked through with Jack on 2026-11-12: an identity provider (Google, Microsoft, Cloudflare Access) in place of the owner password; or Adobe's sign-in doing both jobs, which gives a user ID but no email or name. Also discussed, not built: a `local` deployment on localhost for local agents (weaker isolation, no helper hop).
+- Per-agent identity (so "duet" means Duet) and multi-user (separate people, separate permissions): not built. Options talked through with Jack on 2026-11-12: an identity provider (Google, Microsoft, Cloudflare Access) in place of the owner password; or Adobe's sign-in doing both jobs, which gives a user ID but no email or name. Also discussed, not built: a `local` deployment on localhost for local agents (weaker isolation, no helper hop). All of it is written up in docs/architecture.md, "Who is the user?". If roles get built on the Adobe ID: verify the token (signature, `iss`, `exp`, `aud`, `azp` = our client ID), take identity only from a token the broker fetched itself, refresh once after sign-in, and fail closed when `sub` is missing.
 - The Adobe client registration rides on a localhost callback Adobe allows for local tools. The supported route is asking Adobe to allowlist the broker.
 - `agent-test.html` is still in the scratch folder on da.live; the broker has no delete tool.
 - The sandbox connector in Jack's claude.ai was disconnected by a test run and hasn't been reconnected.

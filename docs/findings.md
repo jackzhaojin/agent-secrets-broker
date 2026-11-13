@@ -16,7 +16,7 @@ Last updated 2026-11-13.
 | | Experiment | Verdict | Evidence |
 |---|---|---|---|
 | 0 | The Claude app connector and Claude Duet (acceptance tests 1 to 4) | **Works** (2026-11-12). Caveat: "duet" means any Claude on Jack's account, not Duet alone | DS1 to DS6 |
-| A | da.live as Jack (user-delegated sign-in held by the broker) | **Works** end to end from Claude Duet (2026-11-13), through Adobe's hosted DA MCP server with a localhost sign-in. Blocked through Adobe's Developer Console. Caveats: reconnecting needs the Mac, and the client registration is unofficial | DL1 to DL7, LV8; Jack's console screenshots |
+| A | da.live as Jack (user-delegated sign-in held by the broker) | **Works** end to end from Claude Duet (2026-11-13), through Adobe's hosted DA MCP server with a localhost sign-in. Blocked through Adobe's Developer Console. Caveats: reconnecting needs the Mac, and the client registration is unofficial. The broker can learn who signed in as a stable Adobe user ID, after one refresh; no email or name | DL1 to DL7, LV8; Jack's console screenshots |
 | B | Best Buy recent orders with Jack's username and password | **Blocked by terms of use** (no attempt made) | Best Buy Terms, "Digital Agents" section, updated 2026-09-25 |
 | C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet on both brokers. Cost: approving every call, reads included, took 3 approvals for one simple job, so the live reads now run without approval (writes still need it) | AP1 to AP6, DS6, DL3 to DL5, DL7 |
 | D1 | Prompt injection via upstream content | **Works with caveats**: the broker contains it, it can't prevent it; Duet read a poisoned README and didn't act on it | N1, N2, DS5 |
@@ -118,6 +118,27 @@ Broker-side evidence is in the test log under "Claude Duet on the live broker" (
   - **This is an access token, not an ID token.** Its audience is Adobe's MCP server, not the broker. The broker receives it directly from Adobe's token endpoint in exchange for a code it handled itself, which is why it can be trusted here, and its signature can be checked against Adobe's published keys (the broker doesn't yet). It isn't a use Adobe has documented.
   - **A new connection needs one refresh before the broker knows who it is.** The broker can do that itself right after sign-in (not built: today the ID appears after the first daily refresh, or a manual one).
 - **The cleaner design for per-person roles** is still a separate identity provider (Google or Microsoft) for who the person is, with Adobe linked afterwards as one of their accounts. That gives an email, a name and groups.
+
+**What an Adobe ID looks like.** Not an email: 24 hex characters and a suffix, in the shape `0123456789ABCDEF01234567@AdobeID`. The suffix is an account type (a personal Adobe ID here), not a domain. It doesn't change when the person changes their email. Nobody knows their own, so a role can't be assigned in advance: the person signs in once, shows up as unassigned, and an admin maps the ID to a name and a role. Jack's ID is shown to him on `/admin`; it is kept out of this repo, and the test log shows only its shape.
+
+**Before using it for roles** (agreed with Jack, not built):
+
+- Verify the token's signature against the keys Adobe publishes at `/jwks`, and check `iss`, `exp`, `nbf`, `aud`, and that `azp` is the broker's own client ID, so a valid Adobe token issued to another app doesn't pass.
+- Take identity only from a token the broker fetched itself, never from one presented to it, and record the ID on the connection once.
+- Keep the ID-to-role table in a Durable Object, so removing a role is immediate.
+- Treat a token with no `sub` as no access. The claim is observed, not documented.
+
+**How it was tested, and what changed on live:**
+
+| Time (UTC, 2026-11-13) | What |
+|---|---|
+| 04:40 | Live redeployed: the status reports which identity fields the broker holds and the field names of Adobe's last token response. Result: the sign-in on record had left no identity at all |
+| 04:46 | Live redeployed: `POST /connect/adobe/refresh` (owner session or admin token) refreshes on demand and answers with a code only |
+| 04:49 | First real refresh. It worked, the refresh token rotated, and the new access token carried `sub` and `azp` |
+| 04:53 | Jack signed in again through the localhost helper. The fresh token had no `sub`; the response fields were `access_token`, `expires_in`, `refresh_token`, `scope`, `token_type` |
+| 04:53 | A refresh 26 seconds later: `sub` again, the same ID |
+
+The live checks (LV5) now report whether the broker knows who signed in and which fields Adobe sent. `npm run admin -- --live status` shows the same, and `npm run admin -- --live adobe-refresh` runs the refresh.
 
 ### The route that is blocked: a Developer Console credential
 

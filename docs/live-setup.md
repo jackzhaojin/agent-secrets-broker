@@ -49,6 +49,22 @@ npm run live -- status
 
 Open `https://agent-secrets-broker-live.jackzhaojin.workers.dev/connect/adobe`, sign in with the owner password, and consent on Adobe's page. The admin page then shows who is connected and when the tokens expire.
 
+### Check who is signed in, or refresh now
+
+```bash
+npm run admin -- --live status
+```
+
+shows the Adobe connection: scopes, expiry, how many refreshes, and which fields Adobe sent. It prints names and shapes only; the Adobe user ID appears masked (`<24 chars>@AdobeID`). The full ID is on the `/admin` page.
+
+Adobe only says who signed in after the first refresh ([findings](findings.md#who-signed-in-what-adobe-tells-the-broker)), so right after a new sign-in the admin page shows "unknown". The broker refreshes by itself about once a day. To do it now:
+
+```bash
+npm run admin -- --live adobe-refresh
+```
+
+Signing in again replaces the stored tokens without revoking the earlier refresh token at Adobe. Use "Disconnect Adobe" on `/admin` first if you want the old one revoked.
+
 ## 5. Connect Claude to the live broker
 
 claude.ai > Customize > Connectors > add a custom connector named `Agent Secrets Broker (live)` with URL `https://agent-secrets-broker-live.jackzhaojin.workers.dev/mcp`, and approve as **duet** with the live owner password. The connector belongs to your Claude account, so every Claude on it that loads connectors can use it.

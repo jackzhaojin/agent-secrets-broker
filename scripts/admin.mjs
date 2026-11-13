@@ -10,6 +10,11 @@
 //   npm run admin -- policy                        the policy in force
 //   npm run admin -- policy push [file]            set a KV override (default: policy.json)
 //   npm run admin -- policy reset                  remove the override (back to the bundled policy.json)
+//   npm run admin -- status                        setup status: names, booleans and claim names, never values
+//   npm run admin -- --live adobe-refresh          refresh the live broker's Adobe tokens now, then show status
+//
+// status masks the Adobe user ID (it shows "<24 chars>@AdobeID"): this output gets pasted into a
+// public repo. The owner sees the full ID on the broker's /admin page.
 //
 // --live targets agent-secrets-broker-live; --base <url> any other deployment (default: the sandbox;
 // http://localhost:8787 for wrangler dev).
@@ -42,6 +47,13 @@ async function api(method, path, body) {
 
 const print = (x) => console.log(JSON.stringify(x, null, 2));
 
+async function status() {
+  const s = await api('GET', 'status');
+  const adobe = s.adobe ?? s.status?.adobe;
+  if (typeof adobe?.account === 'string') adobe.account = adobe.account.replace(/^[^@]+/, (m) => `<${m.length} chars>`);
+  print(s);
+}
+
 switch (cmd) {
   case 'clients':
     print(await api('GET', 'clients'));
@@ -65,7 +77,17 @@ switch (cmd) {
     else if (a1 === 'reset') print(await api('DELETE', 'policy'));
     else print(await api('GET', 'policy'));
     break;
+  case 'status':
+    await status();
+    break;
+  case 'adobe-refresh': {
+    // The same refresh the broker runs daily, on demand. The broker answers with a code, never a token.
+    const res = await fetch(`${BASE}/connect/adobe/refresh`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+    console.log(`refresh: HTTP ${res.status} ${JSON.stringify(await res.json().catch(() => ({})))}`);
+    await status();
+    break;
+  }
   default:
-    console.error('Commands: clients, revoke <client_id> [--delete], audit [n], approvals, policy [push [file] | reset]  (add --live for the live broker)');
+    console.error('Commands: clients, revoke <client_id> [--delete], audit [n], approvals, policy [push [file] | reset], status, adobe-refresh  (add --live for the live broker)');
     process.exit(2);
 }

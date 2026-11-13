@@ -4,7 +4,7 @@ Documentation for people and AI agents alike. Start with the architecture guide.
 
 | Document | What it covers | Read it when |
 |---|---|---|
-| [architecture.md](architecture.md) | How the broker works, with diagrams: the two sign-ins, the localhost redirect, a tool call with approval, where every secret lives | You want to understand or present the design |
+| [architecture.md](architecture.md) | How the broker works, with diagrams: the two sign-ins, the localhost redirect, a tool call with approval, where every secret lives, and who the user is (identity options, what an Adobe ID is) | You want to understand or present the design |
 | [findings.md](findings.md) | Phase 2 results for each experiment: works, works with caveats, or blocked, and why. Negatives included | You want to know what was actually proven, and what failed |
 | [test-log.md](test-log.md) | Generated evidence: the sandbox end-to-end run, Claude Duet's own calls on both brokers, and the live checks | You want the proof behind a claim |
 | [live-setup.md](live-setup.md) | The steps only the owner can do on the live broker: passwords, sign-in, connector | You are setting up or reconnecting the live broker |

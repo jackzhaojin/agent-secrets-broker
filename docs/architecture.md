@@ -280,6 +280,74 @@ Claude can add Adobe's DA MCP server as a connector directly, and for many uses 
 | Different tools per agent | No | Yes |
 | Works for services with no MCP server or OAuth | No | Yes, with an API key in the broker |
 
+## Who is the user?
+
+Today the broker has one owner and one password, so it never has to ask. This section records what it knows now, and what was learned on 2026-11-12 about telling people apart. **Nothing below the first table is built.**
+
+### What the broker knows today
+
+| Question | What answers it |
+|---|---|
+| Which app is connecting? | The client ID, a URL the broker fetches from claude.ai. Every Claude user in the world presents the same one |
+| Who approved the connection? | The owner password. Whoever knows it is recorded as a single fixed user, `owner` |
+| Which agent is this? | A label Jack picks on the consent page (`duet`). It decides the tool list |
+| Which Claude user or session is this? | Nothing. Claude sends no email, user ID or identity token to an MCP server |
+
+So the OAuth "subject" exists, but it is a constant. That is fine for one person and is the first thing to change for two.
+
+### Three ways to learn who the person is
+
+The broker is the authorization server in sign-in A, so working out who the person is has always been its job, not Claude's. It can hand that job to someone else:
+
+| | Owner password (today) | An identity provider | Adobe's sign-in does both jobs |
+|---|---|---|---|
+| How it works | A shared secret on the consent page | The consent step sends the browser to Google, Microsoft or Cloudflare Access first | The consent step sends the browser to Adobe; the same sign-in connects da.live |
+| What the broker learns | Nothing: "the owner" | A verified email, a name, and with Microsoft the tenant and groups | A stable Adobe user ID and an org. No email, no name |
+| Sign-ins per person | Two (broker, then Adobe) | Two (identity, then link Adobe) | One |
+| More than one upstream | Yes | Yes | No: identity is tied to Adobe |
+| Status | In use | Not built | Shown to be possible, not built |
+
+Whichever is chosen, the same rule holds as for every other token here: the identity provider's token stays inside the broker and is used once, to learn who the person is. It is never passed to Claude or to Adobe.
+
+### What Adobe tells the broker about the user
+
+Tested on the live broker, twice, by recording the field names of Adobe's token responses ([findings](findings.md#who-signed-in-what-adobe-tells-the-broker)):
+
+- **No ID token, no email, no name.** Adobe's sign-in server advertises ID tokens in its metadata but doesn't send one, and offers no scope that would add an email.
+- **A user ID appears after the first refresh.** The token from a fresh sign-in has no `sub` claim. The token from a refresh does, with the same ID each time.
+- **An Adobe ID is not an email.** It is 24 hex characters and a suffix, like `0123456789ABCDEF01234567@AdobeID`. The suffix is an account type, not a domain. It stays the same if the person changes their email, which makes it a good key and a poor label: nobody knows their own.
+
+### Using it for roles
+
+What a design built on the Adobe ID would need:
+
+- **A table from ID to person and role**, kept in a Durable Object, because taking a role away has to be immediate (the same reason approvals and revocation live there).
+- **A first sign-in lands as "unassigned".** An admin attaches a name and a role. A token with no `sub` gets no access.
+- **One refresh right after sign-in**, so the broker knows who connected.
+- **Checks before trusting the ID:**
+
+| Check | What it proves |
+|---|---|
+| Signature against the keys Adobe publishes (`/jwks`) | Adobe wrote the token and nobody altered it |
+| `iss` is Adobe's sign-in server | It came from the issuer we expect |
+| `exp` and `nbf` | It is current |
+| `azp` is the broker's own client ID | It was issued to this broker, not to another app |
+| `aud` is Adobe's DA MCP server | It is the kind of token we think it is |
+| `org`, if access is limited to one organization | The person belongs to it |
+
+- **The rule that matters more than the signature:** the broker takes identity only from a token it fetched itself, in exchange for a code it handled, and records the ID on the connection once. It never accepts identity from a token something else presents.
+
+Two cautions. The `sub` claim is observed, not documented by Adobe, so the design must fail closed if it disappears. And the token is an access token for Adobe's MCP server, not an identity token for the broker; an identity provider is the cleaner source when email, names or groups are needed.
+
+### A broker on localhost (discussed, not built)
+
+Running the same code on Jack's Mac would remove the helper hop, since the broker itself would receive Adobe's redirect. Two things change:
+
+- **Only local AI can reach it.** A connector in claude.ai is called from Anthropic's servers, which can't reach a Mac. Claude Duet could not use it.
+- **The isolation becomes a convention.** A local agent with a shell is on the same machine as the token store and the owner password. The broker would still block, limit, approve and log, which catches mistakes and injected instructions. It would not stop an agent that goes and reads the token file.
+
+A checkpoint only works if it is the only road. The hosted broker enforces that; a local one relies on it.
+
 ## Lessons that cost something to learn
 
 - **A scripted pass is not a browser pass.** Two bugs passed every scripted test and failed for Jack: an origin check that real browsers trip (`Origin: null` from a no-referrer page), and a `__Host-` cookie with the wrong path that browsers drop silently.
@@ -288,3 +356,5 @@ Claude can add Adobe's DA MCP server as a connector directly, and for many uses 
 - **A test that signs in as the real app can evict the real user.** The end-to-end test once replaced Jack's own connection. It now refuses to approve when a real connection exists.
 - **The provider's developer console is not the whole story.** Adobe's console said "server-to-server only"; Adobe's own MCP server offered user sign-in.
 - **Approving everything is too much.** Three approvals for list, read and write took two and a half minutes. Approval is now on writes only.
+- **"Unknown" may be the label's fault.** The admin page said "signed in as unknown" for four hours. It only looked for an email or a name, and would have hidden a bare user ID. Recording the field names Adobe actually sent settled it in ten minutes.
+- **Read what a provider's metadata promises, then check what it sends.** Adobe's metadata advertises ID tokens; none arrives. The user ID turned up somewhere the metadata doesn't mention.
