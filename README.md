@@ -7,7 +7,7 @@ The test it is built to pass: *Claude Duet asks the broker to do something that 
 **Status: proof of concept.** Two deployments:
 
 - **The sandbox** holds dummy test secrets (`TEST_SECRET_A` to `G` style values) and calls a mock upstream it hosts itself. It carries the mechanism tests, all passing against the deployed URL, and Claude Duet's own run through a claude.ai connector on 2026-11-12: six of six ([docs/test-log.md](docs/test-log.md)).
-- **The live broker** is for real accounts. It keeps its secrets as Cloudflare Worker secrets for now (1Password is built but not in use) and is waiting on Jack's setup ([docs/live-setup.md](docs/live-setup.md)).
+- **The live broker** is for real accounts. It holds Jack's Adobe sign-in for da.live, and Claude Duet has used it end to end (2026-11-13). Its secrets are Cloudflare Worker secrets for now; 1Password is built but not in use ([docs/live-setup.md](docs/live-setup.md)).
 
 Phase 2 results, negatives included, are in [docs/findings.md](docs/findings.md).
 
@@ -17,9 +17,9 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 
 | | Experiment | Result |
 |---|---|---|
-| A | da.live as Jack (Adobe sign-in held by the broker) | **Works with caveats, up to sign-in.** Adobe's Developer Console offers Jack's org only server-to-server credentials, so the broker signs in through Adobe's hosted DA MCP server with a localhost redirect. Jack is connected; Duet hasn't called the tools yet |
+| A | da.live as Jack (Adobe sign-in held by the broker) | **Works.** Claude Duet listed, read and saved a draft on da.live as Jack, each call approved by him. It goes through Adobe's hosted DA MCP server with a localhost sign-in, because Adobe's Developer Console offers Jack's org only server-to-server credentials |
 | B | Best Buy orders with Jack's username and password | **Blocked** by Best Buy's terms for AI agents. No attempt made |
-| C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet: pending, Jack approved, ran once |
+| C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet on both brokers: pending, Jack approved, ran once. Approving every call, reads included, is slow for simple jobs |
 | D | Negative tests: prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs | **Works with caveats.** The broker contains a fooled agent but can't prevent one; a stolen refresh token works until revoke; "duet" is any Claude on Jack's account |
 
 **It can:**
@@ -39,7 +39,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 - **Get user-delegated access from a provider's developer console when it only issues service credentials.** Adobe's console gave Jack's org server-to-server only; the broker got in through Adobe's own MCP server instead, on a localhost redirect Adobe happens to allow (findings A).
 - **Sign in with a username and password where the site forbids agents.** Best Buy's terms allow agents only through published methods, and there are none. Blocked, no attempt made (findings B).
 - **Solve CAPTCHAs, get past bot checks, or answer MFA prompts.** It doesn't, by design.
-- **Notify the owner of a pending approval.** Jack has to open the admin page; email or push needs an account.
+- **Notify the owner of a pending approval, or approve in bulk.** Jack has to open the admin page for each call; one simple da.live job took three approvals. Email or push needs an account.
 - **Limit an upstream token to less than the user's own rights.** Jack's Adobe token can write wherever he can; only the broker enforces the scratch folder.
 - **Tell one Claude from another.** A connector added in claude.ai belongs to Jack's account, so every Claude on it that loads connectors (Duet, a normal chat, Claude Code) reaches the broker as the same agent. Confirmed 2026-11-12: a Claude Code session showed up as `duet`. Narrow tool lists, approval on writes and revoking when idle limit this; binding to one agent needs that agent to prove its identity (findings, section 0).
 - **Hold two connections from one app.** A new consent from the same app (same client ID) replaces the earlier connection; the consent page warns before it does.
@@ -132,7 +132,7 @@ A tool that needs approval answers its first call with `pending_approval`, an ap
 
 `npm run test:e2e` (default `--target remote`) runs the whole flow against the deployed sandbox and writes [docs/test-log.md](docs/test-log.md). `--target local` runs it against `npm run dev`.
 
-`npm run test:duet -- --since <ISO time>` reads Claude Duet's own calls on the sandbox from the audit log (the connection Jack added in claude.ai) and writes them to the "Claude Duet on the sandbox" section of the test log. Pick a window with no e2e run in it: the e2e's M2 check also connects as duet with the Claude app's client ID.
+`npm run test:duet -- --since <ISO time>` reads Claude Duet's own calls on the sandbox from the audit log (the connection Jack added in claude.ai) and writes them to the "Claude Duet on the sandbox" section of the test log. Pick a window with no e2e run in it: the e2e's M2 check also connects as duet with the Claude app's client ID. Add `--live` for Duet's calls on the live broker (the da.live tools).
 
 It acts as the agent's MCP client and as the owner:
 

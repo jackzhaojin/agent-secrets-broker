@@ -7,7 +7,7 @@ Phase 2 pushes the broker against real accounts and records the negatives as car
 - **Blocked**: can't be done, or shouldn't be, and why.
 - **Pending**: built, but waiting on a step only Jack can take (an account, a password, a consent).
 
-The sandbox (`agent-secrets-broker-sandbox`, dummy secrets) carries the mechanism tests. The live broker (`agent-secrets-broker-live`, real accounts) carries the real-account ones. Test evidence is in [test-log.md](test-log.md): the sandbox run is IDs P1 to L3, Claude Duet's own calls on the sandbox are under "Claude Duet on the sandbox" (DS1 to DS6), and the live checks under "Live broker" (LV1 to LV8).
+The sandbox (`agent-secrets-broker-sandbox`, dummy secrets) carries the mechanism tests. The live broker (`agent-secrets-broker-live`, real accounts) carries the real-account ones. Test evidence is in [test-log.md](test-log.md): the sandbox run is IDs P1 to L3, Claude Duet's own calls on the sandbox are under "Claude Duet on the sandbox" (DS1 to DS6), and Duet's calls on the live broker under "Claude Duet on the live broker" (DL1 to DL7), and the live checks under "Live broker" (LV1 to LV8).
 
 Last updated 2026-11-13.
 
@@ -16,14 +16,14 @@ Last updated 2026-11-13.
 | | Experiment | Verdict | Evidence |
 |---|---|---|---|
 | 0 | The Claude app connector and Claude Duet (acceptance tests 1 to 4) | **Works** (2026-11-12). Caveat: "duet" means any Claude on Jack's account, not Duet alone | DS1 to DS6 |
-| A | da.live as Jack (user-delegated sign-in held by the broker) | **Works with caveats, up to sign-in** (2026-11-12): blocked through Adobe's Developer Console, working through Adobe's hosted DA MCP server with a localhost redirect. Jack is connected; the tools haven't been called by Duet yet | Jack's console screenshots; live audit log; LV5 |
+| A | da.live as Jack (user-delegated sign-in held by the broker) | **Works** end to end from Claude Duet (2026-11-13), through Adobe's hosted DA MCP server with a localhost sign-in. Blocked through Adobe's Developer Console. Caveats: reconnecting needs the Mac, and the client registration is unofficial | DL1 to DL7, LV8; Jack's console screenshots |
 | B | Best Buy recent orders with Jack's username and password | **Blocked by terms of use** (no attempt made) | Best Buy Terms, "Digital Agents" section, updated 2026-09-25 |
-| C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet (pending, Jack approved, the repeat call ran once) | AP1 to AP6, DS6 |
+| C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet on both brokers. Cost: approving every call, reads included, took 3 approvals for one simple job | AP1 to AP6, DS6, DL3 to DL5, DL7 |
 | D1 | Prompt injection via upstream content | **Works with caveats**: the broker contains it, it can't prevent it; Duet read a poisoned README and didn't act on it | N1, N2, DS5 |
 | D2 | What a stolen connector token can do | **Works with caveats**: its own agent's tools until it expires (15 min) or is revoked | N3, N4 |
 | D3 | How fast revoke cuts a token off | **Works, after a fix**: was eventually consistent and could miss a fresh grant; now immediate | N4, T6; run 2026-11-08T22:17:40Z before the fix |
 | D4 | Cross-agent isolation | **Works** | I1, T5, AP4, LV3 |
-| D5 | No secrets or full real-account responses in logs | **Works** on the sandbox; **pending** on live until Duet's calls are captured | L1 to L3, LV7; LV8 needs Duet |
+| D5 | No secrets or full real-account responses in logs | **Works** on both brokers: the live Worker logs captured during Duet's run hold no token or document content | L1 to L3, LV7, LV8, DL6 |
 
 ## 0. The Claude app connector and Claude Duet
 
@@ -72,7 +72,19 @@ Last updated 2026-11-13.
 
 ## A. Adobe da.live as Jack
 
-**Verdict: works with caveats, up to sign-in** (2026-11-12). The first route (a Developer Console credential) is blocked. The second (Adobe's hosted DA MCP server) works: Jack signed in on Adobe's page at 00:27 UTC on 2026-11-13 and the broker holds his tokens. The DA tools haven't been called through it yet.
+**Verdict: works** (2026-11-13), with caveats. Claude Duet listed, read and wrote on da.live as Jack through the live broker, each call approved by Jack, without ever holding a token. The first route (a Developer Console credential) is blocked; the working one goes through Adobe's hosted DA MCP server.
+
+### What Duet did (00:36 to 00:39 UTC, 2026-11-13)
+
+Broker-side evidence is in the test log under "Claude Duet on the live broker" (DL1 to DL7). Duet's own account:
+
+- **`whoami`:** agent `duet`, client "Claude", live environment, policy hash `0b9d5ecf6ee3`, all three DA tools listed as needing approval.
+- **`da_list`** (scratch root): pending `70370dc03897`. One early repeat came back still pending because Jack hadn't approved yet. After approval it returned 1 item: `index.html`, last modified 2026-11-12T05:08:13Z.
+- **`da_get`** `index.html`: pending `bf19e56138a0`, then 38,527 bytes with `untrusted_content: true`. Nothing in it was acted on.
+- **`da_put_draft`** `agent-test.html` (an h1 "Hello from Duet" plus one line): pending `785ceb91e148`, then `saved: true`, `published: false`, with the edit URL. Jack opened it in the da.live editor and it looked right.
+- **No secret in any result.** No token, key or password appeared in anything Duet saw.
+- **Not previewed or published.** `agent-test` returns 404 on both `aem.page` and `aem.live`, and the existing webinar page is unchanged.
+- **The tools worked on their first real calls.** They were built from Adobe's public source for the server (adobe-rnd/da-mcp) before any sign-in existed.
 
 ### The route that works: Adobe's hosted DA MCP server
 
@@ -212,6 +224,10 @@ Caveats:
 - **No notification yet.** Approval happens on the admin page, and Jack has to look. Email needs Email Routing on one of his zones; push needs a service account (ntfy, Pushover). Not set up (an account step).
 - **The agent has to retry.** That relies on the agent following the `next` instruction in the pending result; Duet did. MCP elicitation wasn't used: the agent's own client answers it, so it isn't an out-of-band check by the owner.
 - **The agent's own guardrail comes first.** Duet's platform safety check can deny a write before it reaches the broker (it did once, for a screenshot-only request). A typed ask got through.
+- **Approving every call is slow for simple jobs.** On the live broker all three DA tools need approval, reads included. One small job (list a folder, read a page, save a draft) took Jack three approvals, each a trip to the admin page, and about two and a half minutes from the first call to the last result (DL7). The cheaper settings, none built or chosen yet:
+  - approval on writes only (a policy change, no code);
+  - one approval that covers a tool for a few minutes;
+  - one approval for a small batch of calls shown together.
 
 ## D. Negative tests
 
@@ -261,11 +277,12 @@ Caveat: isolation is between **connections**, and Jack assigns each connection i
 
 ### D5. No secrets or full real-account responses in logs
 
-**Verdict: works on the sandbox; pending on live until Duet's calls are captured.**
+**Verdict: works on both brokers.**
 
 - **Sandbox:** every response body and header, the audit log, and the Worker logs (`wrangler tail`) are searched for all seven dummy secrets: 0 hits (L1 to L3). Each README carries a marker line that may reach the agent but must never reach a log; it never does (L2, L3).
-- **Live:** the audit log holds only structured fields (time, type, outcome, client, agent, tool, code, approval ID, duration), with no JWT-shaped strings (Adobe tokens are JWTs) and no HTML (LV7).
-  - `npm run test:live -- --tail 300` captures the Worker logs while Duet runs its tests and searches them the same way (LV8, pending).
+- **Live:** the audit log holds only structured fields (time, type, outcome, client, agent, tool, code, approval ID, duration), with no JWT-shaped strings (Adobe tokens are JWTs) and no HTML (LV7, DL6).
+  - The Worker logs were captured with `wrangler tail` for 9 minutes while Duet ran its three DA calls, including the 38,527-byte page read and the draft write (187 KB, 34 requests). Searched for JWT-shaped strings, bearer values, broker tokens, the client secret, HTML tags and phrases from the page itself ("Sites and AI", "Hello from Duet"): none (LV8). Cloudflare redacts the `authorization` and `cookie` header values in every event; the broker's own console lines are audit entries of at most a few hundred characters.
+  - **One thing does land in Cloudflare's request logs:** the Adobe sign-in callback URL, which carries the one-time code. The code is spent on arrival and is useless without the PKCE verifier and client secret, so it gives nothing away, but it is the one credential-like value in a logged URL.
 - **Code rules:**
   - The broker logs codes, never upstream bodies, IMS error descriptions or SDK messages.
   - The 1Password store logs only the error name.

@@ -122,8 +122,9 @@ export function seed({ target, values }) {
  */
 export const TEST_LOG = join(ROOT, 'docs', 'test-log.md');
 export const DUET_HEADING = '## Claude Duet on the sandbox';
+export const DUET_LIVE_HEADING = '## Claude Duet on the live broker';
 export const LIVE_HEADING = '## Live broker';
-const SECTION_ORDER = [DUET_HEADING, LIVE_HEADING];
+const SECTION_ORDER = [DUET_HEADING, DUET_LIVE_HEADING, LIVE_HEADING];
 
 export function writeTestLog({ sandbox, sections = {} }) {
   const current = existsSync(TEST_LOG) ? readFileSync(TEST_LOG, 'utf8') : '';
