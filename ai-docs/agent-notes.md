@@ -53,7 +53,7 @@ Read `CLAUDE.md` first: it has the rules. This file has the context behind them.
 
 - **"duet" is not Duet.** A connector belongs to Jack's Claude account, so any Claude on it that loads connectors reaches the broker as the same agent. The OAuth client ID identifies the app, not a user or an agent.
 - **Adobe's Developer Console can't issue the credential you'd expect.** For da.live it offers Jack's org server-to-server only. The working route is Adobe's hosted DA MCP server, whose sign-in server registers clients only for callback addresses it knows: `http://localhost:8976/callback` works, the broker's own URL doesn't.
-- **The broker never holds a raw Adobe token.** Adobe's access token is a wrapper around an encrypted IMS token. No ID token, email or name comes with it. The sign-in token had no `sub`; the first refreshed one did (a stable Adobe user ID). Never put that ID in the repo: `test/live.mjs` masks it in the test log.
+- **The broker never holds a raw Adobe token.** Adobe's access token is a wrapper around an encrypted IMS token. No ID token, email or name comes with it. A token from sign-in has no `sub`; a refreshed one does (a stable Adobe user ID). Seen twice on 2026-11-12. Never put that ID in the repo: `test/live.mjs` masks it in the test log.
 - **Reconnecting Adobe needs Jack's Mac**, because the sign-in returns to localhost. `npm run live -- adobe-connect` runs the helper.
 - **The live secrets are Worker secrets, not 1Password**, by Jack's choice on 2026-11-12. The 1Password path is built and unproven with a real service account.
 
