@@ -18,7 +18,7 @@ Last updated 2026-11-13.
 | 0 | The Claude app connector and Claude Duet (acceptance tests 1 to 4) | **Works** (2026-11-12). Caveat: "duet" means any Claude on Jack's account, not Duet alone | DS1 to DS6 |
 | A | da.live as Jack (user-delegated sign-in held by the broker) | **Works** end to end from Claude Duet (2026-11-13), through Adobe's hosted DA MCP server with a localhost sign-in. Blocked through Adobe's Developer Console. Caveats: reconnecting needs the Mac, and the client registration is unofficial | DL1 to DL7, LV8; Jack's console screenshots |
 | B | Best Buy recent orders with Jack's username and password | **Blocked by terms of use** (no attempt made) | Best Buy Terms, "Digital Agents" section, updated 2026-09-25 |
-| C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet on both brokers. Cost: approving every call, reads included, took 3 approvals for one simple job | AP1 to AP6, DS6, DL3 to DL5, DL7 |
+| C | Per-call approval for sensitive tools | **Works**, scripted and end to end from Duet on both brokers. Cost: approving every call, reads included, took 3 approvals for one simple job, so the live reads now run without approval (writes still need it) | AP1 to AP6, DS6, DL3 to DL5, DL7 |
 | D1 | Prompt injection via upstream content | **Works with caveats**: the broker contains it, it can't prevent it; Duet read a poisoned README and didn't act on it | N1, N2, DS5 |
 | D2 | What a stolen connector token can do | **Works with caveats**: its own agent's tools until it expires (15 min) or is revoked | N3, N4 |
 | D3 | How fast revoke cuts a token off | **Works, after a fix**: was eventually consistent and could miss a fresh grant; now immediate | N4, T6; run 2026-11-08T22:17:40Z before the fix |
@@ -167,7 +167,7 @@ The remaining steps would have been Jack's: the owner password (set), an Adobe D
 - **Scopes requested:** `openid, AdobeID, read_organizations, offline_access, additional_info.projectedProductContext`.
 - **Refresh:** within 10 minutes of expiry. A daily cron also refreshes if the last refresh is 3 days old, because Adobe expires an unused refresh token after 14 days.
 - **Tools** (live policy, agent `duet`):
-  - `da_list` and `da_get` are read-only and behind approval on every call, by policy.
+  - `da_list` and `da_get` are read-only. They were behind approval on every call for Duet's first run and run without it since 2026-11-13 (Jack's choice, see C).
   - `da_put_draft` always needs approval, whatever the policy says. It saves a draft only: never preview or publish, which are separate `admin.hlx.page` calls. It sends `x-da-initiator: mcp`, so da.live's version history shows an agent wrote it.
 - **Scratch folder:** `jackzhaojin/www-eds/drafts/sites-ai-webinar`, named by Jack on 2026-11-12. It already holds a real page (his "Sites and AI" webinar deck), so a write there can replace real content; the approval on every call is what guards it.
 - **Path rules:** every path must sit inside the scratch folder Jack names (`DA_SCRATCH`). Segments are lowercase letters, digits and hyphens only, so `..`, hidden folders and `.da` config are impossible. Documents must end in `.html`.
@@ -224,8 +224,7 @@ Caveats:
 - **No notification yet.** Approval happens on the admin page, and Jack has to look. Email needs Email Routing on one of his zones; push needs a service account (ntfy, Pushover). Not set up (an account step).
 - **The agent has to retry.** That relies on the agent following the `next` instruction in the pending result; Duet did. MCP elicitation wasn't used: the agent's own client answers it, so it isn't an out-of-band check by the owner.
 - **The agent's own guardrail comes first.** Duet's platform safety check can deny a write before it reaches the broker (it did once, for a screenshot-only request). A typed ask got through.
-- **Approving every call is slow for simple jobs.** On the live broker all three DA tools need approval, reads included. One small job (list a folder, read a page, save a draft) took Jack three approvals, each a trip to the admin page, and about two and a half minutes from the first call to the last result (DL7). The cheaper settings, none built or chosen yet:
-  - approval on writes only (a policy change, no code);
+- **Approving every call is slow for simple jobs.** On the live broker all three DA tools need approval, reads included. One small job (list a folder, read a page, save a draft) took Jack three approvals, each a trip to the admin page, and about two and a half minutes from the first call to the last result (DL7). **Jack's choice (2026-11-13): approval on writes only.** `da_list` and `da_get` now run without approval on the live broker (a policy change, no code); `da_put_draft` still needs approval on every call, which is set in code and can't be turned off by policy. The same job now takes one approval. Not yet re-run by Duet under the new policy. Two other settings were considered and not built:
   - one approval that covers a tool for a few minutes;
   - one approval for a small batch of calls shown together.
 

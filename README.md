@@ -19,7 +19,7 @@ Phase 2 at a glance (details and evidence in [docs/findings.md](docs/findings.md
 |---|---|---|
 | A | da.live as Jack (Adobe sign-in held by the broker) | **Works.** Claude Duet listed, read and saved a draft on da.live as Jack, each call approved by him. It goes through Adobe's hosted DA MCP server with a localhost sign-in, because Adobe's Developer Console offers Jack's org only server-to-server credentials |
 | B | Best Buy orders with Jack's username and password | **Blocked** by Best Buy's terms for AI agents. No attempt made |
-| C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet on both brokers: pending, Jack approved, ran once. Approving every call, reads included, is slow for simple jobs |
+| C | Per-call approval for sensitive tools | **Works.** Shown by Claude Duet on both brokers: pending, Jack approved, ran once. Approving every call was slow for simple jobs, so on the live broker only writes need approval now |
 | D | Negative tests: prompt injection, stolen tokens, revoke speed, cross-agent isolation, logs | **Works with caveats.** The broker contains a fooled agent but can't prevent one; a stolen refresh token works until revoke; "duet" is any Claude on Jack's account |
 
 **It can:**

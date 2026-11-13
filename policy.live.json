@@ -1,22 +1,37 @@
 {
-  "version": 1,
-  "notes": "Live broker (real accounts). Real-account tools are read-only this phase except da_put_draft, which writes a draft into the scratch folder and always needs the owner's approval. approval_required puts the DA reads behind approval too (each call). An admin override in KV (PUT /admin/api/policy) takes precedence until it is deleted.",
+  "version": 2,
+  "notes": "Live broker (real accounts). Real-account tools are read-only this phase except da_put_draft, which writes a draft into the scratch folder and always needs the owner's approval (set in code, not here). The DA reads (da_list, da_get) run without approval since 2026-11-13: approving every call took Jack 3 approvals for one small job, and he chose approval on writes only. To put a read back behind approval, add it to approval_required. An admin override in KV (PUT /admin/api/policy) takes precedence until it is deleted.",
   "agents": {
     "duet": {
       "description": "Claude Duet, through a claude.ai custom connector",
-      "match_client_names": ["claude"],
-      "tools": ["whoami", "da_list", "da_get", "da_put_draft"],
-      "approval_required": ["da_list", "da_get"]
+      "match_client_names": [
+        "claude"
+      ],
+      "tools": [
+        "whoami",
+        "da_list",
+        "da_get",
+        "da_put_draft"
+      ]
     },
     "animamesh": {
       "description": "AnimaMesh: no real-account tools yet",
-      "match_client_names": ["animamesh"],
-      "tools": ["whoami"]
+      "match_client_names": [
+        "animamesh"
+      ],
+      "tools": [
+        "whoami"
+      ]
     },
     "inspector": {
       "description": "Scripted checks against the live broker: whoami only",
-      "match_client_names": ["inspector", "e2e"],
-      "tools": ["whoami"]
+      "match_client_names": [
+        "inspector",
+        "e2e"
+      ],
+      "tools": [
+        "whoami"
+      ]
     }
   }
 }

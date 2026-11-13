@@ -59,7 +59,7 @@ Best Buy's terms (updated 2026-09-25) allow AI agents only through Best Buy's "e
 
 ## Decisions (defaults in force unless Jack says otherwise)
 
-- **da_list and da_get behind approval too:** yes, all three DA tools need approval on each call. `da_put_draft` always does, whatever the policy says.
+- **Approval on writes only (changed 2026-11-13):** `da_list` and `da_get` run without approval; `da_put_draft` needs approval on every call, whatever the policy says. Duet's first run had all three behind approval, which took three approvals for one small job.
 - **da_put_draft writes a draft into the scratch folder** (never preview or publish). It is the one write in an otherwise read-only phase.
 - **Approval notifications:** the admin page only.
 - **Best Buy:** recorded as blocked by terms, no attempt made.
